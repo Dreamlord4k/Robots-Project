@@ -1,0 +1,10 @@
+{
+  "_comment": "Справочник материалов. price — закупочная цена единицы, volume — сколько слотов склада занимает единица.",
+  "materials": [
+    { "id": "steel_sheet",  "name": "Стальной лист 2 мм",   "unit": "лист", "price": 120.0, "volume": 1.0 },
+    { "id": "control_unit", "name": "Модуль управления",   "unit": "шт",   "price": 340.0, "volume": 0.5 },
+    { "id": "servo",        "name": "Серводвигатель",      "unit": "шт",   "price": 480.0, "volume": 0.5 },
+    { "id": "paint_batch",  "name": "Порошковая краска",   "unit": "кг",   "price": 90.0,  "volume": 0.2 },
+    { "id": "sensor_kit",   "name": "Комплект датчиков",   "unit": "шт",   "price": 250.0, "volume": 0.3 }
+  ]
+}
