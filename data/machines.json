@@ -1,0 +1,49 @@
+{
+  "_comment": "Параметры станков. Время операции = secondsPerUnit * множитель шага рецепта / speedFactor. Файл читается только эмулятором и Core, менять можно без перекомпиляции.",
+  "factory": {
+    "id": "factory-nsk-01",
+    "name": "Завод «НейроСборка»"
+  },
+  "machines": [
+    {
+      "id": "M1",
+      "name": "Лазерная резка",
+      "operation": "Cutting",
+      "secondsPerUnit": 7.0,
+      "speedFactor": 1.0,
+      "setupSeconds": 2.0,
+      "powerKw": 12.0,
+      "defectRate": 0.01
+    },
+    {
+      "id": "M2",
+      "name": "Покрасочная камера",
+      "operation": "Painting",
+      "secondsPerUnit": 9.0,
+      "speedFactor": 1.0,
+      "setupSeconds": 4.0,
+      "powerKw": 6.0,
+      "defectRate": 0.02
+    },
+    {
+      "id": "M3",
+      "name": "Сборочный пост",
+      "operation": "Assembly",
+      "secondsPerUnit": 14.0,
+      "speedFactor": 1.0,
+      "setupSeconds": 5.0,
+      "powerKw": 4.0,
+      "defectRate": 0.01
+    },
+    {
+      "id": "M4",
+      "name": "Стенд калибровки",
+      "operation": "Calibration",
+      "secondsPerUnit": 8.0,
+      "speedFactor": 1.0,
+      "setupSeconds": 3.0,
+      "powerKw": 3.0,
+      "defectRate": 0.005
+    }
+  ]
+}
