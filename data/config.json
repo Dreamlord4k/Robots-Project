@@ -1,0 +1,46 @@
+{
+  "_comment": "Глобальная конфигурация раунда. Здесь же — пороги, которыми пользуется стратегия (блок strategy).",
+  "round": {
+    "durationSeconds": 600.0,
+    "tickSeconds": 0.5,
+    "randomSeed": 20240517
+  },
+  "warehouse": {
+    "capacitySlots": 36.0,
+    "slotVolume": 1.0,
+    "storageCostPerSlotSecond": 0.02,
+    "reserveSlotsForWorkInProgress": 6.0
+  },
+  "supply": {
+    "intervalSeconds": 9.0,
+    "jitterSeconds": 3.0,
+    "batchSizeMin": 2,
+    "batchSizeMax": 7,
+    "materials": [
+      { "materialId": "steel_sheet",  "weight": 30 },
+      { "materialId": "control_unit", "weight": 20 },
+      { "materialId": "servo",        "weight": 12 },
+      { "materialId": "paint_batch",  "weight": 20 },
+      { "materialId": "sensor_kit",   "weight": 18 }
+    ]
+  },
+  "pricing": {
+    "energyTariffPerKwh": 7.2,
+    "defectScrapCostFactor": 0.35,
+    "customerReplySecondsMin": 1.0,
+    "customerReplySecondsMax": 4.0,
+    "finishedRobotSlots": 2.0
+  },
+  "strategy": {
+    "minimumProfitPerMinute": 40.0,
+    "maxWarehouseFillRatio": 0.8,
+    "urgentFillRatio": 0.95,
+    "sameTypeSetupBonus": 0.08,
+    "targetStockCoverageSeconds": 120.0,
+    "maxFinishedBuffer": 3
+  },
+  "output": {
+    "resultsJsonPath": "../site/data/results.json",
+    "maxLogEntries": 200
+  }
+}
