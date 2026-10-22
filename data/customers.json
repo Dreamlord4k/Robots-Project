@@ -1,0 +1,45 @@
+{
+  "_comment": "Покупатели. acceptChance — вероятность согласия по данной цене; отказ означает, что робота надо предложить следующему. maxUnits ограничивает спрос за раунд.",
+  "customers": [
+    {
+      "id": "C1_TECHSTOCK",
+      "name": "«ТехноСклад»",
+      "segment": "Логистика",
+      "preferences": [
+        { "robotTypeId": "R3_TITAN",   "price": 5300.0, "maxUnits": 10, "acceptChance": 0.80 },
+        { "robotTypeId": "R1_SCRAPPER", "price": 2700.0, "maxUnits": 25, "acceptChance": 0.95 },
+        { "robotTypeId": "R4_SCOUT",   "price": 2900.0, "maxUnits": 15, "acceptChance": 0.70 }
+      ]
+    },
+    {
+      "id": "C2_AGRODRONE",
+      "name": "«АгроДрон»",
+      "segment": "Сельское хозяйство",
+      "preferences": [
+        { "robotTypeId": "R4_SCOUT",  "price": 3400.0, "maxUnits": 20, "acceptChance": 0.90 },
+        { "robotTypeId": "R2_PIXEL",  "price": 3500.0, "maxUnits": 12, "acceptChance": 0.75 },
+        { "robotTypeId": "R1_SCRAPPER", "price": 2500.0, "maxUnits": 10, "acceptChance": 0.60 }
+      ]
+    },
+    {
+      "id": "C3_MEGAPOLIS",
+      "name": "«МегаПолис»",
+      "segment": "Ритейл",
+      "preferences": [
+        { "robotTypeId": "R2_PIXEL",  "price": 3900.0, "maxUnits": 15, "acceptChance": 0.85 },
+        { "robotTypeId": "R5_GUARD",  "price": 4700.0, "maxUnits": 10, "acceptChance": 0.70 },
+        { "robotTypeId": "R1_SCRAPPER", "price": 2450.0, "maxUnits": 12, "acceptChance": 0.55 }
+      ]
+    },
+    {
+      "id": "C4_STROYMONTАЖ",
+      "name": "«СтройМонтаж»",
+      "segment": "Промышленность",
+      "preferences": [
+        { "robotTypeId": "R3_TITAN",  "price": 5600.0, "maxUnits": 8,  "acceptChance": 0.90 },
+        { "robotTypeId": "R5_GUARD",  "price": 4400.0, "maxUnits": 9,  "acceptChance": 0.65 },
+        { "robotTypeId": "R4_SCOUT",  "price": 2750.0, "maxUnits": 6,  "acceptChance": 0.50 }
+      ]
+    }
+  ]
+}
