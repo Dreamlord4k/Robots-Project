@@ -1,0 +1,16 @@
+<mxfile host="Electron">
+  <diagram name="Страница-1" id="fV0yEl2CboKyjJGFuafT">
+    <mxGraphModel dx="858" dy="1691" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="l5xu0kyjIVLyJ1RqcHro-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Фронт:&lt;div&gt;Создание (удаление) и выбор станка и выбор его операции и времени выполнения, занят он или нет, какую заготовку делает&lt;/div&gt;&lt;div&gt;Добавление покуталей с тем, какого робота он хочет купить и сколько он заплатит за него&lt;/div&gt;&lt;div&gt;Склад - отображения хранящихся заготовок/деталей&lt;/div&gt;&lt;div&gt;*Список заготовок&lt;/div&gt;&lt;div&gt;Отведённое время&lt;/div&gt;&lt;div&gt;Полученная прибыль&lt;/div&gt;&lt;div&gt;*Покупатель может выбирать робота только из существующих вариантов&lt;/div&gt;&lt;div&gt;(выпадающий список)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="230" width="530" x="110" y="-50" as="geometry" />
+        </mxCell>
+        <mxCell id="l5xu0kyjIVLyJ1RqcHro-2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Бэк:&lt;div&gt;В&amp;nbsp;class Machine записывать с фронта&amp;nbsp;&lt;br&gt;В class Customer помимо цены и типа робота записывать прибыль/время&amp;nbsp;&lt;/div&gt;&lt;div&gt;Метод для построения алгоритма создания робота&lt;/div&gt;" vertex="1">
+          <mxGeometry height="310" width="570" x="110" y="200" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
