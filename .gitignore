@@ -1,4 +1,18 @@
-bin/
-obj/
-.vs/
-*.user
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and OS files
+.env
+.DS_Store
+Thumbs.db
+
+# Local test outputs / temp data
+data/
+*.tmp
