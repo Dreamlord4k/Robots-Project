@@ -9,7 +9,7 @@ const ARCHETYPES = [
 ];
 
 function archetypeKey(color, handles) {
-  return XXXINLINECODEXXX33XXXINLINECODEXXX;
+  return `${color}:${handles ? 1 : 0}`;
 }
 
 function hammingDistance(a, b) {
@@ -226,21 +226,21 @@ export class FactoryBot {
       this.buyers.set(id, new BuyerBelief(id));
     }
 
-    this.lastOfferMinPrice = new Map(); // XXXINLINECODEXXX34XXXINLINECODEXXX -> minPrice
+    this.lastOfferMinPrice = new Map(); // buyerId#itemId -> minPrice
     this.machineBusyUntil = new Map(); // machineId -> tick
     this.machineInFlight = new Map(); // machineId -> { opId, kind, color, handles, finishTick }
     this.seqCache = new Map(); // seq -> commands[] (идемпотентность)
   }
 
   handleEvent(payload) {
-    const seq = payload.seq;
+    const seq = payload?.seq;
     if (seq !== undefined && this.seqCache.has(seq)) {
       return this.seqCache.get(seq);
     }
 
-    const t = payload.t ?? 0;
-    const event = payload.event || {};
-    const state = payload.state || {};
+    const t = payload?.t ?? 0;
+    const event = payload?.event || {};
+    const state = payload?.state || {};
     const commands = [];
 
     // 1. Обработка входящего события для обновления внутренних знаний
@@ -254,7 +254,7 @@ export class FactoryBot {
       const buyer = this.buyers.get(event.buyerId);
       if (buyer) {
         buyer.cooldownUntil = t + this.buyerCooldown;
-        const key = XXXINLINECODEXXX35XXXINLINECODEXXX;
+        const key = `${event.buyerId}#${event.itemId}`;
         const minUsed = this.lastOfferMinPrice.get(key) ?? 44.0;
         this.lastOfferMinPrice.delete(key);
         buyer.updateOnSaleResult(event.item, event.outcome, event.price, minUsed);
@@ -279,7 +279,7 @@ export class FactoryBot {
 
     // 2. Снимок текущего склада и занятости станков
     const rawItems = state.items || state.inventory || [];
-    const items = rawItems.map(it => ({
+    const items = (rawItems || []).map(it => ({
       id: it.id,
       kind: it.kind || it.type,
       props: it.props || { color: it.color ?? null, handles: Boolean(it.handles) }
@@ -556,7 +556,7 @@ export class FactoryBot {
           minPrice: off.minPrice
         });
         reservedItemIds.add(off.itemId);
-        this.lastOfferMinPrice.set(XXXINLINECODEXXX36XXXINLINECODEXXX, off.minPrice);
+        this.lastOfferMinPrice.set(`${off.buyerId}#${off.itemId}`, off.minPrice);
         const b = this.buyers.get(off.buyerId);
         if (b) {
           b.cooldownUntil = t + this.buyerCooldown;
@@ -799,9 +799,9 @@ export class NaiveBot {
   }
 
   handleEvent(payload) {
-    const t = payload.t ?? 0;
-    const event = payload.event || {};
-    const state = payload.state || {};
+    const t = payload?.t ?? 0;
+    const event = payload?.event || {};
+    const state = payload?.state || {};
     const commands = [];
     const evType = event.type || event.event;
 
@@ -809,7 +809,7 @@ export class NaiveBot {
       this.cooldowns.set(event.buyerId, t + this.buyerCooldown);
     }
 
-    const items = (state.items || state.inventory || []).map(it => ({
+    const items = ((state.items || state.inventory || []) || []).map(it => ({
       id: it.id,
       kind: it.kind || it.type,
       props: it.props || { color: it.color ?? null, handles: Boolean(it.handles) }
@@ -870,4 +870,42 @@ export class NaiveBot {
 
     return commands;
   }
+}
+
+// ===== Совместимость с тестами и CLI: createBot / createNaiveBot =====
+
+function wrapHandle(bot) {
+  return (payload) => {
+    if (!payload || typeof payload !== 'object') return { commands: [] };
+    const commands = bot.handleEvent(payload) || [];
+    return { commands: commands.map((c) => ({ ...c, cmd: c.type })) };
+  };
+}
+
+export function createBot(config = {}) {
+  const bot = new FactoryBot({
+    horizon: config.horizon ?? 650,
+    capacity: config.capacity ?? 12,
+    storageFee: config.storageFee,
+    offerFee: config.offerFee,
+    buyerCooldown: config.buyerCooldown ?? 8,
+    buyers: config.buyers,
+    machines: config.machines,
+  });
+  bot.world = config;
+  bot.handle = wrapHandle(bot);
+  bot.belief = () => bot.buyers;
+  return bot;
+}
+
+export function createNaiveBot(config = {}) {
+  const bot = new NaiveBot({
+    capacity: config.capacity ?? 12,
+    buyerCooldown: config.buyerCooldown ?? 8,
+    buyers: config.buyers,
+    machines: config.machines,
+  });
+  bot.world = config;
+  bot.handle = wrapHandle(bot);
+  return bot;
 }

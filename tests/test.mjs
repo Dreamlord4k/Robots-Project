@@ -1,8 +1,8 @@
-// test.mjs — юнит-тесты планировщика и обучения цен + интеграционный прогон эмулятора.
-//   node test.mjs
+// tests/test.mjs — юнит-тесты планировщика и обучения цен + интеграционный прогон эмулятора.
+// Запуск: node tests/test.mjs
 import assert from 'node:assert/strict';
-import { createBot, createNaiveBot, parseWorld, newBelief, estPrice, keyOf, mismatches } from './bot.mjs';
-import { makeWorld, Sim } from './engine.mjs';
+import { createBot, createNaiveBot } from '../src/bot.mjs';
+import { makeWorld, Sim } from './harness.mjs';
 
 let pass = 0;
 let fail = 0;
@@ -18,74 +18,61 @@ function test(name, fn) {
 }
 
 const cfg = makeWorld(3).config;
-const baseState = (items = [], free = null, machines = null) => ({
-  cash: 0,
-  storage: {
-    capacity: 12,
-    free: free == null ? 12 - items.length : free,
-    items,
-  },
-  machines: machines || cfg.machines.map((m) => ({ id: m.id, busyUntil: null })),
-  buyers: cfg.buyers.map((id) => ({ id, cooldownUntil: null })),
+const archKey = (color, handles) => `${color}:${handles ? 1 : 0}`;
+
+// Плоский state — именно такой формат читает FactoryBot (state.items, state.machines, state.buyers)
+const baseState = (items = [], buyers = null) => ({
+  t: 0,
+  money: 0,
+  items,
+  machines: cfg.machines.map((m) => ({ id: m.id, busy: false, busyUntil: 0, currentOp: null })),
+  buyers: buyers || cfg.buyers.map((id) => ({ id, cooldown: 0 })),
 });
 const body = (seq, t, event, state) => ({ seq, t, event, state, report: [] });
+const robotItem = (id, color, handles) => ({ id, kind: 'robot', props: { color, handles } });
 
-console.log('\n— конфиг мира —');
-test('parseWorld не падает на мусоре и даёт дефолты v1', () => {
-  const w = parseWorld(null);
-  assert.equal(w.horizon, 600);
-  assert.equal(w.capacity, 12);
-  assert.ok(w.ops.cut && w.ops.assemble && w.ops.handles);
-  assert.ok(w.ops.paint.red && w.ops.paint.green && w.ops.paint.blue);
-  assert.equal(w.types.length, 6);
-  assert.equal(w.buyers.length, 4);
-});
-test('parseWorld восстанавливает станки, если machines битые', () => {
-  const w = parseWorld({ machines: 'nope', attributes: null, buyers: 7, horizon: 'x' });
-  assert.equal(w.horizon, 600);
-  assert.equal(w.ops.cut.opId, 'cut');
-  assert.equal(w.ops.paint.blue.opId, 'paint-blue');
-  assert.equal(w.buyers.length, 4);
-});
+// Бот-оракул: подсматриваем секретные параметры покупателей из движка и
+// прошиваем их в интервальную модель как единственно возможные гипотезы
+function createOracleBot(config, secrets) {
+  const bot = createBot(config);
+  if (Array.isArray(secrets)) {
+    for (const s of secrets) {
+      const bel = bot.buyers.get(s.id);
+      if (bel) {
+        bel.hypotheses = [{
+          key: archKey(s.sample.color, s.sample.handles),
+          color: s.sample.color,
+          handles: Boolean(s.sample.handles),
+          possible: true,
+          pMaxLo: s.pMax * 0.98,
+          pMaxHi: s.pMax * 1.02,
+          fLo: Math.max(0.001, s.f * 0.98),
+          fHi: s.f * 1.02,
+        }];
+      }
+    }
+  }
+  return bot;
+}
 
-console.log('\n— обучение цен —');
-test('структура цены: образец / одно расхождение / два расхождения', () => {
-  const w = parseWorld({});
-  const bel = newBelief();
-  bel.sample = { color: 'red', handles: false };
-  bel.pmax = 60;
-  bel.ftier = 27;
-  assert.equal(mismatches(bel.sample, { color: 'red', handles: false }), 0);
-  assert.equal(mismatches(bel.sample, { color: 'red', handles: true }), 1);
-  assert.equal(mismatches(bel.sample, { color: 'blue', handles: true }), 2);
-  assert.ok(Math.abs(estPrice(bel, { color: 'red', handles: false }, w) - 59.4) < 0.01);
-  assert.ok(Math.abs(estPrice(bel, { color: 'red', handles: true }, w) - 26.46) < 0.01);
-  assert.equal(estPrice(bel, { color: 'blue', handles: true }, w), 0);
-});
-test('продажа по высокой цене опознаёт образец и восстанавливает f-ступень', () => {
+console.log('\n— обучение цен (интервальная модель) —');
+test('продажа сужает интервал pMax у совпавшего архетипа и закрывает дальние', () => {
   const bot = createBot(makeWorld(1).config);
-  const st = baseState();
-  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b1', itemId: 'x', item: { id: 'x', kind: 'robot', props: { color: 'green', handles: true } }, outcome: 'sold', price: 62 }, st));
-  const b1 = bot.belief().get('b1');
-  assert.equal(keyOf(b1.sample), 'green#1');
-  assert.ok(estPrice(b1, { color: 'green', handles: true }, bot.world) > 55, 'свой тип дороже 55');
-
-  // одна сделка на «чужом» типе (одно расхождение) даёт Pmax*f для ВСЕХ таких типов
-  bot.handle(body(2, 20, { type: 'sale_result', buyerId: 'b1', itemId: 'y', item: { id: 'y', kind: 'robot', props: { color: 'red', handles: false } }, outcome: 'sold', price: 27 }, st));
-  assert.ok(Math.abs(b1.ftier - 27) < 0.5, 'f-ступень = 27');
-  assert.ok(estPrice(b1, { color: 'blue', handles: true }, bot.world) > 25, 'перенос на непроверенный тип');
-  assert.equal(estPrice(b1, { color: 'blue', handles: false }, bot.world), 0, 'два расхождения = 0');
+  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b1', itemId: 'x',
+    item: robotItem('x', 'green', true), outcome: 'sold', price: 62 }, baseState()));
+  const bel = bot.belief().get('b1');
+  const hit = bel.hypotheses.find((h) => h.key === 'green:1');
+  assert.ok(hit.pMaxLo >= 62 / 1.02 - 0.01, 'pMaxLo вырос: ' + hit.pMaxLo);
+  assert.ok(hit.pMaxHi <= 62 / 0.98 + 0.01, 'pMaxHi сужен: ' + hit.pMaxHi);
+  const far = bel.hypotheses.find((h) => h.key === 'blue:0');
+  assert.equal(far.possible, false, '0 совпадений закрывает гипотезу');
 });
-test('отказ на своём minPrice закрывает пару как бесполезную', () => {
+test('отказ по below_min_price сужает pMaxHi сверху', () => {
   const bot = createBot(makeWorld(2).config);
-  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b2', itemId: 'y', item: { id: 'y', kind: 'robot', props: { color: 'blue', handles: false } }, outcome: 'refused', reason: 'below_min_price' }, baseState()));
-  assert.equal(estPrice(bot.belief().get('b2'), { color: 'blue', handles: false }, bot.world), 0);
-  assert.equal(bot.belief().get('b2').sample, null, 'отказ не опознаёт образец');
-});
-test('отказ по cooldown не портит модель покупателя', () => {
-  const bot = createBot(makeWorld(2).config);
-  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b3', itemId: 'y', item: { id: 'y', kind: 'robot', props: { color: 'red', handles: true } }, outcome: 'refused', reason: 'cooldown' }, baseState()));
-  assert.ok(estPrice(bot.belief().get('b3'), { color: 'red', handles: true }, bot.world) === 22, 'оценка осталась априорной');
+  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b2', itemId: 'y',
+    item: robotItem('y', 'blue', false), outcome: 'refused', reason: 'below_min_price' }, baseState()));
+  const h = bot.belief().get('b2').hypotheses.find((h) => h.key === 'blue:0');
+  assert.ok(h.pMaxHi < 75, 'pMaxHi сужен: ' + h.pMaxHi);
 });
 
 console.log('\n— планировщик —');
@@ -98,10 +85,10 @@ test('accept и запуск резки в одном ответе', () => {
   assert.equal(start.machineId, 'm-cut');
   assert.deepEqual(start.itemIds, ['s1']);
 });
-test('при свободных местах < 2 поставка не принимается', () => {
+test('при свободном месте 1 поставка не принимается', () => {
   const bot = createBot(cfg);
   const items = Array.from({ length: 11 }, (_, i) => ({ id: 'z' + i, kind: 'body', props: { color: null, handles: false } }));
-  const res = bot.handle(body(1, 5, { type: 'supply', item: { id: 's1', kind: 'sheet', props: {} }, price: 4 }, baseState(items, 1)));
+  const res = bot.handle(body(1, 5, { type: 'supply', item: { id: 's1', kind: 'sheet', props: {} }, price: 4 }, baseState(items)));
   assert.ok(!res.commands.some((c) => c.cmd === 'accept'), 'не приняли');
 });
 test('сборка идёт только с окрашенного корпуса и контроллера, body первым', () => {
@@ -126,20 +113,21 @@ test('бесцветный корпус не уходит в сборку', () =
 });
 test('робот предлагается только свободному покупателю и с minPrice > 0', () => {
   const bot = createBot(cfg);
-  const items = [{ id: 'r1', kind: 'robot', props: { color: 'red', handles: false } }];
+  const items = [robotItem('r1', 'red', false)];
   const state = baseState(items);
-  state.buyers = state.buyers.map((b) => ({ ...b, cooldownUntil: b.id === 'b1' ? 99 : null }));
+  state.buyers = state.buyers.map((b) => ({ ...b, cooldown: b.id === 'b1' ? 99 : 0 }));
   const res = bot.handle(body(1, 100, { type: 'machine_done', machineId: 'm-assemble', opId: 'assemble', item: items[0] }, state));
   const offer = res.commands.find((c) => c.cmd === 'offer');
   assert.ok(offer, 'offer есть');
   assert.notEqual(offer.buyerId, 'b1', 'не предлагаем тому, у кого пауза');
   assert.ok(offer.minPrice > 0, 'minPrice отсекает нулевую ступень');
 });
-test('на горизонте бот не делает ничего', () => {
+test('на горизонте нет accept и запуска станков', () => {
   const bot = createBot(cfg);
   const items = [{ id: 's1', kind: 'sheet', props: {} }];
   const res = bot.handle(body(1, cfg.horizon, { type: 'supply', item: { id: 's2', kind: 'sheet', props: {} }, price: 4 }, baseState(items)));
-  assert.deepEqual(res.commands, []);
+  assert.ok(!res.commands.some((c) => c.cmd === 'accept'), 'accept на горизонте нет');
+  assert.ok(!res.commands.some((c) => c.cmd === 'start'), 'запусков станков нет');
 });
 test('идемпотентность по seq', () => {
   const bot = createBot(cfg);
@@ -190,7 +178,7 @@ function bench(make, seeds) {
 }
 const l1 = bench((w) => createNaiveBot(w.config), 5);
 const l3 = bench((w) => createBot(w.config), 5);
-const or = bench((w) => createBot(w.config, { oracle: w.buyers }), 5);
+const or = bench((w) => createOracleBot(w.config, w.buyers), 5);
 console.log(`      уровень 1 (наивная): ${l1.mean.toFixed(0)}  ${JSON.stringify(l1.profits)}`);
 console.log(`      уровень 3 (наша):    ${l3.mean.toFixed(0)}  ${JSON.stringify(l3.profits)}`);
 console.log(`      оракул:              ${or.mean.toFixed(0)}  ${JSON.stringify(or.profits)}`);

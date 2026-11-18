@@ -206,7 +206,7 @@ export class ArenaEmulator {
         const kind = isSheet ? 'sheet' : 'control';
         const price = isSheet ? 4 : 3;
         const item = {
-          id: XXXINLINECODEXXX38XXXINLINECODEXXX,
+          id: `s-${this.idSeq++}`,
           kind,
           props: {}
         };
@@ -360,7 +360,7 @@ export class ArenaEmulator {
         const baseProps = opDef.inherit ? { ...picked[0].props } : { color: null, handles: false };
         const outProps = { ...baseProps, ...(opDef.output.props || {}) };
         const outputItem = {
-          id: XXXINLINECODEXXX39XXXINLINECODEXXX,
+          id: `o-${this.idSeq++}`,
           kind: opDef.output.kind,
           props: outProps
         };

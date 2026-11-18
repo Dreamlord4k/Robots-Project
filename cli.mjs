@@ -8,7 +8,7 @@ const horizonIdx = args.indexOf('--horizon');
 const horizon = horizonIdx !== -1 ? Number(args[horizonIdx + 1]) : 650;
 const verbose = args.includes('--verbose');
 
-console.log(XXXINLINECODEXXX47XXXINLINECODEXXX);
+console.log(`Running benchmark: ${seedsCount} worlds, horizon ${horizon}...`);
 
 let sumNaive = 0;
 let sumLevel3 = 0;
@@ -20,12 +20,10 @@ let totalEvents = 0;
 for (let i = 1; i <= seedsCount; i++) {
   const seed = i * 1013;
 
-  // Уровень 1 (Наивный)
   const emu1 = new ArenaEmulator({ seed, horizon });
   const rep1 = emu1.runFullShift(new NaiveBot(emu1.getStartPayload()));
   sumNaive += rep1.profit;
 
-  // Уровень 3+ (Байесовский планировщик)
   const emu3 = new ArenaEmulator({ seed, horizon });
   const bot3 = new FactoryBot(emu3.getStartPayload());
 
@@ -41,9 +39,9 @@ for (let i = 1; i <= seedsCount; i++) {
 
   if (verbose) {
     console.log(
-      XXXINLINECODEXXX48XXXINLINECODEXXX +
-      XXXINLINECODEXXX49XXXINLINECODEXXX +
-      XXXINLINECODEXXX50XXXINLINECODEXXX
+      `World #${i} (seed ${seed}): ` +
+      `Naive=${rep1.profit.toFixed(1)}, ` +
+      `Level3=${rep3.profit.toFixed(1)} (${rep3.robotsSold} sold)`
     );
   }
 }
@@ -53,9 +51,9 @@ const avgLevel3 = sumLevel3 / seedsCount;
 const avgEventUs = (totalLatencyMs * 1000) / Math.max(1, totalEvents);
 
 console.log('------------------------------------------------------------------');
-console.log(XXXINLINECODEXXX51XXXINLINECODEXXX);
-console.log(XXXINLINECODEXXX52XXXINLINECODEXXX);
-console.log(XXXINLINECODEXXX53XXXINLINECODEXXX);
-console.log(XXXINLINECODEXXX54XXXINLINECODEXXX);
-console.log(XXXINLINECODEXXX55XXXINLINECODEXXX);
+console.log(`Benchmark results (${seedsCount} worlds):`);
+console.log(`  Naive Avg Profit: ${avgNaive.toFixed(2)}`);
+console.log(`  Level3 Avg Profit: ${avgLevel3.toFixed(2)}`);
+console.log(`  Total Robots Sold: ${totalSold}`);
+console.log(`  Avg Event Latency: ${avgEventUs.toFixed(2)} µs`);
 console.log('------------------------------------------------------------------');

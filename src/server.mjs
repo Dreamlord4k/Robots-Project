@@ -11,12 +11,11 @@ const LOG_DIR = path.join(__dirname, '..', 'logs');
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-// Хранилище активных и завершённых прогонов (строго изолировано по runId)
 const runs = new Map();
 
 function appendLogAsync(runId, entry) {
   const safeId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '_');
-  const filePath = path.join(LOG_DIR, XXXINLINECODEXXX41XXXINLINECODEXXX);
+  const filePath = path.join(LOG_DIR, `${safeId}.jsonl`);
   fs.promises.appendFile(filePath, JSON.stringify(entry) + '\n').catch(() => {});
 }
 
@@ -45,7 +44,6 @@ function readJsonBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-  // Полный CORS + Private Network Access для браузерной песочницы арены
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
@@ -57,14 +55,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url, XXXINLINECODEXXX42XXXINLINECODEXXX);
+  const baseUrl = `http://${req.headers.host ?? 'localhost:8080'}`;
+  const url = new URL(req.url, baseUrl);
 
-  // 1. Healthcheck Арены
+  // Healthcheck
   if (url.pathname === '/v1/health' && req.method === 'GET') {
     return sendJson(res, 200, { status: 'ok' });
   }
 
-  // 2. Эндпоинты турнира: /v1/runs/{runId}/{start|event|finish}
+  // /v1/runs/{runId}/{start|event|finish}
   const runMatch = url.pathname.match(/^\/v1\/runs\/([^/]+)\/(start|event|finish)$/);
   if (runMatch && req.method === 'POST') {
     const runId = decodeURIComponent(runMatch[1]);
@@ -102,14 +101,19 @@ const server = http.createServer(async (req, res) => {
       const t0 = performance.now();
       let record = runs.get(runId);
       if (!record) {
-        // Защита, если event пришёл без предварительного start
         record = {
           runId,
           mode: req.headers['x-arena-mode'] || 'arena',
           startedAt: new Date().toISOString(),
           finished: false,
           bot: new FactoryBot({}),
-          telemetry: { profitHistory: [], lastState: null, salesLog: [], commandsLog: [], report: null }
+          telemetry: {
+            profitHistory: [],
+            lastState: null,
+            salesLog: [],
+            commandsLog: [],
+            report: null
+          }
         };
         runs.set(runId, record);
       }
@@ -119,7 +123,6 @@ const server = http.createServer(async (req, res) => {
       const commands = record.bot.handleEvent(payload);
       const elapsedMs = Math.round((performance.now() - t0) * 100) / 100;
 
-      // Обновляем телеметрию для дашборда
       if (body.state) {
         record.telemetry.lastState = body.state;
         const money = body.state.money ?? body.state.balance ?? 0;
@@ -158,7 +161,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 3. API для веб-интерфейса (мониторинг прогонов и запуск локальной симуляции)
+  // API для веб-интерфейса: /api/runs
   if (url.pathname === '/api/runs' && req.method === 'GET') {
     const list = [...runs.values()].map(r => ({
       runId: r.runId,
@@ -194,6 +197,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // Локальная симуляция: /api/simulate
   if (url.pathname === '/api/simulate' && req.method === 'POST') {
     const body = await readJsonBody(req);
     const seed = Number(body.seed ?? Math.floor(Math.random() * 100000));
@@ -207,7 +211,7 @@ const server = http.createServer(async (req, res) => {
     const botNaive = new NaiveBot(emuNaive.getStartPayload());
     const reportNaive = emuNaive.runFullShift(botNaive);
 
-    const simId = XXXINLINECODEXXX43XXXINLINECODEXXX;
+    const simId = `sim-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     runs.set(simId, {
       runId: simId,
       mode: 'local-emulator',
@@ -231,7 +235,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  // 4. Раздача веб-интерфейса
+  // Раздача index.html
   if ((url.pathname === '/' || url.pathname === '/index.html') && req.method === 'GET') {
     const htmlPath = path.join(__dirname, '..', 'web', 'index.html');
     if (fs.existsSync(htmlPath)) {
@@ -245,6 +249,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(XXXINLINECODEXXX44XXXINLINECODEXXX);
-  console.log(XXXINLINECODEXXX45XXXINLINECODEXXX);
+  console.log(`Server started on port ${PORT}`);
+  console.log(`Dashboard available at http://localhost:${PORT}`);
 });
