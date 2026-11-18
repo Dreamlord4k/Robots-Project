@@ -22,36 +22,36 @@ const DEFAULT_MACHINES = {
   },
   'm-handles': {
     ops: {
-      handles: {
+      'add-handles': {
         duration: 2,
         cost: 2,
-        inputs: [{ kind: 'body', handles: false }],
-        inherit: true,
+        inputs: [{ kind: 'body', props: { color: null, handles: false } }],
+        inherit: 0,
         output: { kind: 'body', props: { handles: true } }
       }
     }
   },
   'm-paint': {
     ops: {
-      paint_red: {
+      'paint-red': {
         duration: 3,
         cost: 2,
-        inputs: [{ kind: 'body', color: null }],
-        inherit: true,
+        inputs: [{ kind: 'body', props: { color: null } }],
+        inherit: 0,
         output: { kind: 'body', props: { color: 'red' } }
       },
-      paint_green: {
+      'paint-green': {
         duration: 3,
         cost: 2,
-        inputs: [{ kind: 'body', color: null }],
-        inherit: true,
+        inputs: [{ kind: 'body', props: { color: null } }],
+        inherit: 0,
         output: { kind: 'body', props: { color: 'green' } }
       },
-      paint_blue: {
+      'paint-blue': {
         duration: 3,
         cost: 2,
-        inputs: [{ kind: 'body', color: null }],
-        inherit: true,
+        inputs: [{ kind: 'body', props: { color: null } }],
+        inherit: 0,
         output: { kind: 'body', props: { color: 'blue' } }
       }
     }
@@ -61,8 +61,8 @@ const DEFAULT_MACHINES = {
       assemble: {
         duration: 3,
         cost: 3,
-        inputs: [{ kind: 'body', colored: true }, { kind: 'control' }],
-        inherit: true,
+        inputs: [{ kind: 'body', props: { color: '*' } }, { kind: 'control' }],
+        inherit: 0,
         output: { kind: 'robot' }
       }
     }
@@ -76,6 +76,11 @@ export class ArenaEmulator {
     this.horizon = options.horizon ?? 650;
     this.capacity = options.capacity ?? 12;
     this.idleEvery = options.idleEvery ?? 5;
+    this.eventTimeoutMs = options.eventTimeoutMs ?? 2000;
+    this.maxTimeouts = options.maxTimeouts ?? 20;
+    this.now = options.now ?? (() => performance.now());
+    this.consecutiveErrors = 0;
+    this.stopReason = null;
     this.storageFee = { sheet: 0.1, control: 0.1, body: 0.2, robot: 0.5 };
     this.offerFee = 1;
     this.buyerCooldown = 8;
@@ -102,22 +107,24 @@ export class ArenaEmulator {
         archetypes.push({ color: c, handles: h });
       }
     }
-    // Перемешиваем 6 типов для покупателей
-    for (let i = archetypes.length - 1; i > 0; i--) {
-      const j = Math.floor(this.rng() * (i + 1));
-      [archetypes[i], archetypes[j]] = [archetypes[j], archetypes[i]];
-    }
-
-    this.buyers = ['b1', 'b2', 'b3', 'b4'].map((id, idx) => ({
+    this.buyers = ['b1', 'b2', 'b3', 'b4'].map(id => ({
       id,
-      sample: archetypes[idx % archetypes.length],
+      // Выбор с возвращением: разные покупатели могут хотеть одного робота.
+      sample: { ...archetypes[Math.floor(this.rng() * archetypes.length)] },
       pMax: Math.round((45 + this.rng() * 30) * 100) / 100,
       f: Math.round((0.3 + this.rng() * 0.3) * 1000) / 1000,
       cooldown: 0
     }));
 
-    this.nextSupplyTick = 2 + Math.floor(this.rng() * 3); // 2..4
+    // Независимые генераторы сохраняют поток поставок при разных решениях ботов.
+    this.supplyRng = {
+      sheet: createMulberry32((this.seed ^ 0x51ee7) >>> 0),
+      control: createMulberry32((this.seed ^ 0xc017201) >>> 0)
+    };
+    this.nextSupplyTick = Object.fromEntries(Object.entries(this.supplyRng)
+      .map(([kind, rng]) => [kind, 2 + Math.floor(rng() * 3)]));
     this.currentSupply = null;
+    this.previousReport = [];
     this.pendingSales = []; // { deliverTick, buyerId, item, minPrice }
 
     this.stats = {
@@ -128,7 +135,11 @@ export class ArenaEmulator {
       storageCosts: 0,
       penalties: 0,
       robotsSold: 0,
+      robotsProduced: 0,
       robotsDiscarded: 0,
+      timeouts: 0,
+      errors: 0,
+      failedEvents: [],
       invalidCommands: [],
       history: [] // для графиков веб-интерфейса
     };
@@ -136,36 +147,30 @@ export class ArenaEmulator {
 
   getStartPayload() {
     return {
+      runId: 'local-emulator',
+      mode: 'practice',
       horizon: this.horizon,
+      eventTimeoutMs: this.eventTimeoutMs,
+      idleEvery: this.idleEvery,
+      attributes: { color: ['red', 'green', 'blue'], handles: [true, false] },
       capacity: this.capacity,
       storageFee: this.storageFee,
       offerFee: this.offerFee,
       buyerCooldown: this.buyerCooldown,
       priceCeiling: this.priceCeiling,
       buyers: this.buyers.map(b => b.id),
-      machines: this.machinesDef
+      machines: Object.entries(this.machinesDef).map(([id, machine]) => ({ id, ops: Object.entries(machine.ops).map(([opId, op]) => ({ ...structuredClone(op), id: opId })) }))
     };
   }
 
   getPublicState() {
-    const machineState = {};
-    for (const [mId, m] of Object.entries(this.machines)) {
-      machineState[mId] = {
-        busy: m.busy,
-        busyUntil: m.busyUntil,
-        currentOp: m.currentOp ? m.currentOp.opId : null
-      };
-    }
-    const buyerState = {};
-    for (const b of this.buyers) {
-      buyerState[b.id] = { cooldown: b.cooldown };
-    }
+    const machines = Object.entries(this.machines).map(([id, m]) => ({ id, busyUntil: m.busy ? m.busyUntil : null }));
+    const buyers = this.buyers.map(b => ({ id: b.id, cooldownUntil: b.cooldown > 0 ? this.t + b.cooldown : null }));
     return {
-      t: this.t,
-      money: Math.round(this.money * 100) / 100,
-      items: structuredClone(this.items),
-      machines: machineState,
-      buyers: buyerState
+      cash: Math.round(this.money * 100) / 100,
+      storage: { capacity: this.capacity, free: this.capacity - this.items.length - machines.filter(m => m.busyUntil !== null).length, items: structuredClone(this.items) },
+      machines,
+      buyers
     };
   }
 
@@ -173,9 +178,10 @@ export class ArenaEmulator {
    * Прогон полной смены [0 .. horizon] с переданным ботом
    */
   runFullShift(bot) {
-    for (let tick = 0; tick <= this.horizon; tick++) {
+    shift: for (let tick = 0; tick <= this.horizon; tick++) {
       this.t = tick;
       this.currentSupply = null;
+      const seqAtStart = this.seq;
 
       // 1. Снижаем кулдауны покупателей
       for (const b of this.buyers) {
@@ -186,6 +192,7 @@ export class ArenaEmulator {
       for (const [mId, m] of Object.entries(this.machines)) {
         if (m.busy && m.busyUntil === tick && m.currentOp) {
           const produced = m.currentOp.outputItem;
+          if (produced.kind === 'robot') this.stats.robotsProduced++;
           const opId = m.currentOp.opId;
           m.busy = false;
           m.currentOp = null;
@@ -197,40 +204,35 @@ export class ArenaEmulator {
             opId,
             item: structuredClone(produced)
           });
+          if (this.stopReason) break shift;
         }
       }
 
-      // 3. Событие supply (каждые 2-4 такта)
-      if (tick === this.nextSupplyTick) {
-        const isSheet = this.rng() < 0.5;
-        const kind = isSheet ? 'sheet' : 'control';
-        const price = isSheet ? 4 : 3;
+      // 3. Каждый вид приходит независимо с интервалом 2–4 такта.
+      for (const kind of ['sheet', 'control']) {
+        if (tick !== this.nextSupplyTick[kind]) continue;
+        const price = kind === 'sheet' ? 4 : 3;
         const item = {
           id: `s-${this.idSeq++}`,
           kind,
           props: {}
         };
         this.currentSupply = { item, price, accepted: false };
-        this.nextSupplyTick = tick + 2 + Math.floor(this.rng() * 3);
+        this.nextSupplyTick[kind] = tick + 2 + Math.floor(this.supplyRng[kind]() * 3);
 
         this.dispatchEvent(bot, {
           type: 'supply',
           item: structuredClone(item),
           price
         });
+        if (this.stopReason) break shift;
         this.currentSupply = null;
       }
 
       // 4. Событие idle (раз в idleEvery тактов)
-      if (tick % this.idleEvery === 0) {
+      if (tick % this.idleEvery === 0 && this.seq === seqAtStart) {
         this.dispatchEvent(bot, { type: 'idle' });
-      }
-
-      // 5. События sale_result
-      const dueSales = this.pendingSales.filter(s => s.deliverTick === tick);
-      this.pendingSales = this.pendingSales.filter(s => s.deliverTick > tick);
-      for (const sale of dueSales) {
-        this.dispatchEvent(bot, sale.event);
+        if (this.stopReason) break shift;
       }
 
       // 6. Учёт загрузки станков и списание хранения в конце такта
@@ -257,21 +259,58 @@ export class ArenaEmulator {
   }
 
   dispatchEvent(bot, event) {
-    this.seq++;
-    const payload = {
-      seq: this.seq,
-      t: this.t,
-      event,
-      state: this.getPublicState(),
-      report: this.getReportSummary()
-    };
-
-    const commands = bot.handleEvent(payload) || [];
-    this.executeCommands(commands.slice(0, 50));
+    let nextEvent = event;
+    do {
+      this.seq++;
+      const payload = {
+        seq: this.seq,
+        t: this.t,
+        event: nextEvent,
+        state: this.getPublicState(),
+        report: this.previousReport
+      };
+      const started = this.now();
+      let commands;
+      let failure = null;
+      try {
+        commands = bot.handleEvent(payload);
+      } catch {
+        failure = 'error';
+      }
+      const elapsedMs = this.now() - started;
+      if (elapsedMs > this.eventTimeoutMs) failure = 'timeout';
+      else if (!failure && !Array.isArray(commands)) failure = 'error';
+      if (failure) {
+        this.stats[failure === 'timeout' ? 'timeouts' : 'errors']++;
+        this.stats.failedEvents.push({ seq: this.seq, t: this.t, reason: failure, elapsedMs });
+        this.consecutiveErrors++;
+        commands = [];
+        // ТЗ неоднозначно о границе; используем формулировку «больше maxTimeouts».
+        if (this.consecutiveErrors > this.maxTimeouts) this.stopReason = 'max_timeouts';
+      } else {
+        this.consecutiveErrors = 0;
+      }
+      this.previousReport = this.executeCommands(commands.slice(0, 50));
+      // Поставка доступна только при обработке её собственного события.
+      this.currentSupply = null;
+      nextEvent = this.pendingSales.shift()?.event;
+    } while (nextEvent && !this.stopReason);
   }
 
   executeCommands(commands) {
-    for (const cmd of commands) {
+    const report = [];
+    for (let index = 0; index < commands.length; index++) {
+      const command = commands[index];
+      const before = this.stats.invalidCommands.length;
+      this.executeCommand(command);
+      const failure = this.stats.invalidCommands[before];
+      report.push(failure ? { cmd: index, ok: false, reason: failure.reason } : { cmd: index, ok: true });
+    }
+    return report;
+  }
+
+  executeCommand(command) {
+    for (const cmd of [command && { ...command, type: command.cmd ?? command.type }]) {
       if (!cmd || !cmd.type) {
         this.recordInvalid(cmd, 'unknown_command');
         continue;
@@ -303,12 +342,12 @@ export class ArenaEmulator {
         const m = this.machines[cmd.machineId];
         const mDef = this.machinesDef[cmd.machineId];
         if (!m || !mDef) {
-          this.recordInvalid(cmd, 'unknown_machine/op');
+          this.recordInvalid(cmd, 'unknown_machine');
           continue;
         }
         const opDef = mDef.ops[cmd.opId];
         if (!opDef) {
-          this.recordInvalid(cmd, 'unknown_machine/op');
+          this.recordInvalid(cmd, 'unknown_op');
           continue;
         }
         if (m.busy) {
@@ -333,9 +372,11 @@ export class ArenaEmulator {
           const req = opDef.inputs[i];
           const act = picked[i];
           if (req.kind && act.kind !== req.kind) validInputs = false;
-          if (req.color === null && act.props.color !== null) validInputs = false;
-          if (req.colored && !act.props.color) validInputs = false;
-          if (req.handles === false && act.props.handles) validInputs = false;
+          for (const [key, expected] of Object.entries(req.props || {})) {
+            const actual = act.props?.[key];
+            // В ТЗ null — «не задано»; отсутствие свойства трактуем так же.
+            if (expected === null ? actual != null : expected === '*' ? actual == null : actual !== expected) validInputs = false;
+          }
         }
         if (!validInputs) {
           this.recordInvalid(cmd, 'bad_inputs');
@@ -357,7 +398,7 @@ export class ArenaEmulator {
         }
 
         // Формируем выходной предмет с наследованием свойств
-        const baseProps = opDef.inherit ? { ...picked[0].props } : { color: null, handles: false };
+        const baseProps = Number.isInteger(opDef.inherit) && picked[opDef.inherit] ? { ...picked[opDef.inherit].props } : {};
         const outProps = { ...baseProps, ...(opDef.output.props || {}) };
         const outputItem = {
           id: `o-${this.idSeq++}`,
@@ -378,7 +419,7 @@ export class ArenaEmulator {
         }
         const itemIdx = this.items.findIndex(i => i.id === cmd.itemId);
         if (itemIdx === -1) {
-          this.recordInvalid(cmd, 'no_such_item');
+          this.recordInvalid(cmd, 'no_such_robot');
           continue;
         }
         const item = this.items[itemIdx];
@@ -390,7 +431,13 @@ export class ArenaEmulator {
           // Комиссия списывается даже при попытке на кулдауне
           this.money -= this.offerFee;
           this.stats.offerFees += this.offerFee;
-          this.recordInvalid(cmd, 'buyer_cooldown');
+          this.pendingSales.push({
+            deliverTick: this.t,
+            event: {
+              type: 'sale_result', buyerId: buyer.id, itemId: item.id,
+              item: structuredClone(item), outcome: 'refused', reason: 'cooldown'
+            }
+          });
           continue;
         }
 
@@ -458,6 +505,7 @@ export class ArenaEmulator {
     return {
       profit: Math.round(this.money * 100) / 100,
       robotsSold: this.stats.robotsSold,
+      robotsProduced: this.stats.robotsProduced,
       invalidCount: this.stats.invalidCommands.length
     };
   }
@@ -477,7 +525,12 @@ export class ArenaEmulator {
       offerFees: Math.round(this.stats.offerFees * 100) / 100,
       storageCosts: Math.round(this.stats.storageCosts * 100) / 100,
       robotsSold: this.stats.robotsSold,
+      robotsProduced: this.stats.robotsProduced,
       robotsDiscarded: this.stats.robotsDiscarded,
+      timeouts: this.stats.timeouts,
+      errors: this.stats.errors,
+      failedEvents: this.stats.failedEvents,
+      stopReason: this.stopReason,
       invalidCommands: this.stats.invalidCommands,
       utilization,
       buyersSecret: this.buyers,

@@ -8,8 +8,7 @@ export function makeWorld(seed) {
     horizon: start.horizon,
     capacity: start.capacity,
     buyers: start.buyers,                                        // ['b1'... 'b4']
-    machines: Object.keys(start.machines).map((id) => ({ id })),  // [{ id: 'm-cut' }...]
-    ...start.machines,                                           // ops-определения по id станков
+    machines: start.machines,
   };
   return { config, seed, buyers: em.buyers, _em: em };
 }

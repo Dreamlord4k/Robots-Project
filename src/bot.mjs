@@ -218,6 +218,11 @@ export class FactoryBot {
     this.buyerCooldown = startParams.buyerCooldown ?? 8;
     this.priceCeiling = startParams.priceCeiling ?? 80;
     this.machinesCfg = parseMachinesConfig(startParams.machines);
+    // Если start явно задаёт станки, вымышленные значения по умолчанию недопустимы.
+    this.productionAvailable = !Array.isArray(startParams.machines) || [
+      this.machinesCfg.cut, this.machinesCfg.handles, this.machinesCfg.assemble,
+      ...COLORS.map(color => this.machinesCfg.paint[color])
+    ].every(cfg => startParams.machines.some(m => m?.id === cfg.machineId && Array.isArray(m.ops) && m.ops.some(op => op?.id === cfg.opId)));
 
     const rawBuyers = startParams.buyers || ['b1', 'b2', 'b3', 'b4'];
     this.buyers = new Map();
@@ -230,6 +235,7 @@ export class FactoryBot {
     this.machineBusyUntil = new Map(); // machineId -> tick
     this.machineInFlight = new Map(); // machineId -> { opId, kind, color, handles, finishTick }
     this.seqCache = new Map(); // seq -> commands[] (идемпотентность)
+    this.previousCommands = [];
   }
 
   handleEvent(payload) {
@@ -242,6 +248,29 @@ export class FactoryBot {
     const event = payload?.event || {};
     const state = payload?.state || {};
     const commands = [];
+
+    for (const entry of Array.isArray(payload?.report) ? payload.report : []) {
+      if (entry?.ok !== false || !Number.isInteger(entry.cmd)) continue;
+      const previous = this.previousCommands[entry.cmd];
+      if (previous?.type === 'start') {
+        this.machineBusyUntil.delete(previous.machineId);
+        this.machineInFlight.delete(previous.machineId);
+      } else if (previous?.type === 'offer') {
+        this.lastOfferMinPrice.delete(`${previous.buyerId}#${previous.itemId}`);
+        const buyer = this.buyers.get(previous.buyerId);
+        const buyerState = Array.isArray(state.buyers) ? state.buyers.find(b => b.id === previous.buyerId) : state.buyers?.[previous.buyerId];
+        if (buyer) {
+          buyer.cooldownUntil = typeof buyerState?.cooldownUntil === 'number' ? buyerState.cooldownUntil : t;
+          buyer.offersCount = Math.max(0, buyer.offersCount - 1);
+        }
+      }
+    }
+
+    if (!this.productionAvailable) {
+      this.previousCommands = [];
+      if (seq !== undefined) this.seqCache.set(seq, []);
+      return [];
+    }
 
     // 1. Обработка входящего события для обновления внутренних знаний
     const evType = event.type || event.event;
@@ -593,6 +622,7 @@ export class FactoryBot {
     }
 
     const finalCommands = commands.slice(0, 50);
+    this.previousCommands = finalCommands;
     if (seq !== undefined) {
       this.seqCache.set(seq, finalCommands);
     }
@@ -811,7 +841,7 @@ export class NaiveBot {
       this.cooldowns.set(event.buyerId, t + this.buyerCooldown);
     }
 
-    const items = ((state.items || state.inventory || []) || []).map(it => ({
+    const items = ((state.storage?.items || state.items || state.inventory || []) || []).map(it => ({
       id: it.id,
       kind: it.kind || it.type,
       props: it.props || { color: it.color ?? null, handles: Boolean(it.handles) }
@@ -819,14 +849,15 @@ export class NaiveBot {
 
     const busy = new Set();
     if (state.machines) {
-      for (const [mId, mState] of Object.entries(state.machines)) {
-        if (mState.busy || mState.currentOp || (mState.busyUntil && mState.busyUntil > t)) {
+      const entries = Array.isArray(state.machines) ? state.machines.map(m => [m.id, m]) : Object.entries(state.machines);
+      for (const [mId, mState] of entries) {
+        if (mState.busy || mState.currentOp || (mState.busyUntil != null && mState.busyUntil >= t && mState.busy !== false)) {
           busy.add(mId);
         }
       }
     }
 
-    const free = this.capacity - items.length - busy.size;
+    const free = state.storage?.free ?? (this.capacity - items.length - busy.size);
     if (evType === 'supply' && event.item && free >= 1) {
       const id = event.item.id || event.itemId;
       commands.push({ type: 'accept', itemId: id });

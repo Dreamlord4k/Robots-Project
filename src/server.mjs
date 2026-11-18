@@ -43,10 +43,17 @@ function readJsonBody(req) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch(() => {
+    if (!res.headersSent) sendJson(res, 500, { error: { code: 'internal_error', message: 'Не удалось обработать запрос' } });
+    else if (!res.writableEnded) res.end();
+  });
+});
+
+async function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Arena-Run, X-Arena-Spec, X-Arena-Mode, X-Arena-Seq');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
   if (req.method === 'OPTIONS') {
@@ -73,10 +80,17 @@ const server = http.createServer(async (req, res) => {
     try {
       body = await readJsonBody(req);
     } catch {
-      return sendJson(res, 400, { error: 'Invalid JSON' });
+      return sendJson(res, 400, { error: { code: 'invalid_json', message: 'Некорректный JSON' } });
+    }
+
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return sendJson(res, 400, { error: { code: 'invalid_body', message: 'Тело запроса должно быть объектом' } });
     }
 
     if (action === 'start') {
+      if ((body.machines !== undefined && !Array.isArray(body.machines)) || (body.buyers !== undefined && !Array.isArray(body.buyers))) {
+        return sendJson(res, 400, { error: { code: 'invalid_body', message: 'machines и buyers должны быть массивами' } });
+      }
       const bot = new FactoryBot(body);
       const record = {
         runId,
@@ -89,6 +103,9 @@ const server = http.createServer(async (req, res) => {
           lastState: null,
           salesLog: [],
           commandsLog: [],
+          robotsProduced: 0,
+          robotsSold: 0,
+          seenSeq: new Set(),
           report: null
         }
       };
@@ -100,6 +117,7 @@ const server = http.createServer(async (req, res) => {
     if (action === 'event') {
       const t0 = performance.now();
       let record = runs.get(runId);
+      if (record?.finished) return sendJson(res, 409, { error: { code: 'run_finished', message: 'Прогон завершён' } });
       if (!record) {
         record = {
           runId,
@@ -112,6 +130,9 @@ const server = http.createServer(async (req, res) => {
             lastState: null,
             salesLog: [],
             commandsLog: [],
+            robotsProduced: 0,
+            robotsSold: 0,
+            seenSeq: new Set(),
             report: null
           }
         };
@@ -119,28 +140,34 @@ const server = http.createServer(async (req, res) => {
       }
 
       const seq = body.seq ?? Number(req.headers['x-arena-seq'] || 0);
+      const isNewEvent = !record.telemetry.seenSeq.has(seq);
+      record.telemetry.seenSeq.add(seq);
       const payload = { ...body, seq };
       const commands = record.bot.handleEvent(payload).map(({ type, ...command }) => ({ cmd: type, ...command }));
       const elapsedMs = Math.round((performance.now() - t0) * 100) / 100;
 
-      if (body.state) {
-        record.telemetry.lastState = body.state;
-        const money = body.state.money ?? body.state.balance ?? 0;
+      if (body.state && isNewEvent) {
+        record.telemetry.lastState = { ...body.state, t: body.t ?? 0 };
+        const money = body.state.cash ?? body.state.money ?? body.state.balance ?? 0;
         const t = body.t ?? 0;
         const hist = record.telemetry.profitHistory;
         if (hist.length === 0 || hist[hist.length - 1].t !== t) {
           hist.push({
             t,
             money,
-            itemsCount: (body.state.items || body.state.inventory || []).length
+            itemsCount: (body.state.storage?.items || body.state.items || body.state.inventory || []).length
           });
+        } else {
+          hist[hist.length - 1] = { t, money, itemsCount: (body.state.storage?.items || body.state.items || body.state.inventory || []).length };
         }
       }
-      if (body.event?.type === 'sale_result' || body.event?.event === 'sale_result') {
+      if (isNewEvent && body.event?.type === 'machine_done' && body.event.item?.kind === 'robot') record.telemetry.robotsProduced++;
+      if (isNewEvent && (body.event?.type === 'sale_result' || body.event?.event === 'sale_result')) {
+        if (body.event.outcome === 'sold') record.telemetry.robotsSold++;
         record.telemetry.salesLog.unshift({ t: body.t, ...body.event });
         if (record.telemetry.salesLog.length > 50) record.telemetry.salesLog.pop();
       }
-      if (commands.length > 0) {
+      if (isNewEvent && commands.length > 0) {
         record.telemetry.commandsLog.unshift({ t: body.t, seq, commands, elapsedMs });
         if (record.telemetry.commandsLog.length > 50) record.telemetry.commandsLog.pop();
       }
@@ -155,6 +182,8 @@ const server = http.createServer(async (req, res) => {
         record.finished = true;
         record.finishedAt = new Date().toISOString();
         record.telemetry.report = body.report || body;
+        record.bot = null;
+        record.telemetry.seenSeq.clear();
       }
       appendLogAsync(runId, { ts: Date.now(), action: 'finish', body });
       return sendJson(res, 200, { ok: true });
@@ -169,7 +198,7 @@ const server = http.createServer(async (req, res) => {
       startedAt: r.startedAt,
       finished: r.finished,
       lastTick: r.telemetry.lastState?.t ?? 0,
-      money: r.telemetry.lastState?.money ?? r.telemetry.report?.profit ?? 0
+      money: r.telemetry.report?.profit ?? r.telemetry.lastState?.cash ?? r.telemetry.lastState?.money ?? 0
     }));
     return sendJson(res, 200, { runs: list.reverse() });
   }
@@ -180,7 +209,7 @@ const server = http.createServer(async (req, res) => {
     const record = runs.get(runId);
     if (!record) return sendJson(res, 404, { error: 'Run not found' });
 
-    const buyersBelief = [...record.bot.buyers.values()].map(b => ({
+    const buyersBelief = [...(record.bot?.buyers.values() || [])].map(b => ({
       buyerId: b.buyerId,
       cooldownUntil: b.cooldownUntil,
       salesCount: b.salesCount,
@@ -246,7 +275,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   sendJson(res, 404, { error: 'Not Found' });
-});
+}
 
 server.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
