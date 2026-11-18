@@ -120,7 +120,7 @@ const server = http.createServer(async (req, res) => {
 
       const seq = body.seq ?? Number(req.headers['x-arena-seq'] || 0);
       const payload = { ...body, seq };
-      const commands = record.bot.handleEvent(payload);
+      const commands = record.bot.handleEvent(payload).map(({ type, ...command }) => ({ cmd: type, ...command }));
       const elapsedMs = Math.round((performance.now() - t0) * 100) / 100;
 
       if (body.state) {
@@ -145,7 +145,7 @@ const server = http.createServer(async (req, res) => {
         if (record.telemetry.commandsLog.length > 50) record.telemetry.commandsLog.pop();
       }
 
-      appendLogAsync(runId, { ts: Date.now(), action: 'event', seq, t: body.t, event: body.event, commands, elapsedMs });
+      appendLogAsync(runId, { ts: Date.now(), action: 'event', seq, t: body.t, event: body.event, report: body.report, commands, elapsedMs });
       return sendJson(res, 200, { commands });
     }
 

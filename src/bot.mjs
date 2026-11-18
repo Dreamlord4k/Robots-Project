@@ -60,10 +60,10 @@ function parseMachinesConfig(rawMachines) {
 
       if (mId === 'm-cut' || (inputs.length === 1 && inputs[0]?.kind === 'sheet')) {
         cfg.cut = { machineId: mId, opId, duration: dur, cost };
-      } else if (mId === 'm-handles' || out.handles === true) {
+      } else if (mId === 'm-handles' || out.props?.handles === true || out.handles === true) {
         cfg.handles = { machineId: mId, opId, duration: dur, cost };
-      } else if (mId === 'm-paint' || (out.color && COLORS.includes(out.color))) {
-        const c = out.color || COLORS.find(col => opId.toLowerCase().includes(col));
+      } else if (mId === 'm-paint' || COLORS.includes(out.props?.color || out.color)) {
+        const c = out.props?.color || out.color || COLORS.find(col => opId.toLowerCase().includes(col));
         if (c) {
           cfg.paint[c] = { machineId: mId, opId, duration: dur, cost };
         }
@@ -257,7 +257,7 @@ export class FactoryBot {
         const key = `${event.buyerId}#${event.itemId}`;
         const minUsed = this.lastOfferMinPrice.get(key) ?? 44.0;
         this.lastOfferMinPrice.delete(key);
-        buyer.updateOnSaleResult(event.item, event.outcome, event.price, minUsed);
+        if (event.reason !== 'cooldown') buyer.updateOnSaleResult(event.item, event.outcome, event.price, minUsed);
       }
     }
 
@@ -269,7 +269,9 @@ export class FactoryBot {
       for (const [bId, bState] of bEntries) {
         const belief = this.buyers.get(bId);
         if (!belief) continue;
-        if (typeof bState.cooldown === 'number' && bState.cooldown > 0) {
+        if (typeof bState.cooldownUntil === 'number') {
+          belief.cooldownUntil = Math.max(belief.cooldownUntil, bState.cooldownUntil);
+        } else if (typeof bState.cooldown === 'number' && bState.cooldown > 0) {
           belief.cooldownUntil = Math.max(belief.cooldownUntil, t + bState.cooldown);
         } else if (typeof bState.availableAt === 'number') {
           belief.cooldownUntil = Math.max(belief.cooldownUntil, bState.availableAt);
@@ -278,7 +280,7 @@ export class FactoryBot {
     }
 
     // 2. Снимок текущего склада и занятости станков
-    const rawItems = state.items || state.inventory || [];
+    const rawItems = state.storage?.items || state.items || state.inventory || [];
     const items = (rawItems || []).map(it => ({
       id: it.id,
       kind: it.kind || it.type,
@@ -294,7 +296,7 @@ export class FactoryBot {
         const isBusy =
           Boolean(mState.busy) ||
           Boolean(mState.currentOp) ||
-          (typeof mState.busyUntil === 'number' && mState.busyUntil > t) ||
+          (typeof mState.busyUntil === 'number' && mState.busyUntil >= t && mState.busy !== false) ||
           (typeof mState.remaining === 'number' && mState.remaining > 0);
         if (isBusy) {
           busyMachines.add(mId);
@@ -308,7 +310,7 @@ export class FactoryBot {
       if (until > t) busyMachines.add(mId);
     }
 
-    let freeSlots = this.capacity - items.length - busyMachines.size;
+    let freeSlots = state.storage?.free ?? (this.capacity - items.length - busyMachines.size);
     const reservedItemIds = new Set();
     const ticksLeft = Math.max(0, this.horizon - t);
 
@@ -350,7 +352,7 @@ export class FactoryBot {
           const archKey = archetypeKey(body.props.color, body.props.handles);
           const demand = demandMap.get(archKey);
           const needsHandlesLater =
-            !body.props.handles &&
+            !body.props.color && !body.props.handles &&
             (demandMap.get(archetypeKey(body.props.color, true))?.score ?? 0) >
               (demand?.score ?? 0) * 1.25;
 
@@ -408,7 +410,7 @@ export class FactoryBot {
     const hndCfg = this.machinesCfg.handles;
     if (!busyMachines.has(hndCfg.machineId) && ticksLeft >= hndCfg.duration + asmCfg.duration) {
       const noHandleBodies = items.filter(
-        i => i.kind === 'body' && !i.props.handles && !reservedItemIds.has(i.id)
+        i => i.kind === 'body' && !i.props.color && !i.props.handles && !reservedItemIds.has(i.id)
       );
 
       let targetBody = null;
