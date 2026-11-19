@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+const port = 19000 + Math.floor(Math.random() * 20000);
+const server = spawn(process.execPath, ['src/server.mjs'], { env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'inherit'] });
+try {
+  await once(server.stdout, 'data');
+  const base = `http://127.0.0.1:${port}`;
+  const req = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  const invalid = await req('/v1/runs/invalid/start', 'null');
+  assert.equal(invalid.status, 400);
+  assert.equal(typeof (await invalid.json()).error.code, 'string');
+  const malformed = await req('/v1/runs/invalid/start', '{');
+  assert.equal(malformed.status, 400);
+  assert.equal(typeof (await malformed.json()).error.message, 'string');
+  const malformedMachines = await req('/v1/runs/invalid/start', JSON.stringify({ machines: [null], buyers: [] }));
+  assert.ok(malformedMachines.status >= 400);
+  assert.equal(typeof (await malformedMachines.json()).error.code, 'string');
+  assert.equal((await fetch(base + '/v1/health')).status, 200);
+  const preflight = await fetch(base + '/v1/runs/empty/start', { method: 'OPTIONS', headers: { Origin: 'https://arena.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type,x-arena-run' } });
+  const allowed = preflight.headers.get('access-control-allow-headers').toLowerCase().split(',').map(x => x.trim());
+  for (const h of ['authorization', 'content-type', 'x-arena-run']) assert.ok(allowed.includes(h), h);
+  assert.equal((await req('/v1/runs/empty/start', JSON.stringify({ horizon: 600, capacity: 12, buyers: [], machines: [] }))).status, 200);
+  const payload = { seq: 1, t: 1, event: { type: 'supply', item: { id: 's', kind: 'sheet', props: {} }, price: 4 }, state: { storage: { capacity: 12, free: 12, items: [] }, machines: [], buyers: [] }, report: [] };
+  const response = await req('/v1/runs/empty/event', JSON.stringify(payload));
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.ok(!result.commands.some(c => c.cmd === 'start'), 'нельзя запускать отсутствующий станок');
+  assert.equal((await req('/v1/runs/empty/finish', '{}')).status, 200);
+  const finished = await (await fetch(base + '/api/runs/empty')).json();
+  assert.deepEqual(finished.buyersBelief, []);
+  const after = await req('/v1/runs/empty/event', JSON.stringify(payload));
+  assert.equal(after.status, 409);
+  assert.equal((await req('/v1/runs/empty/finish', '{}')).status, 200);
+  assert.equal((await req('/v1/runs/empty/start', JSON.stringify({ horizon: 600, capacity: 12, buyers: [], machines: [] }))).status, 200);
+  assert.equal((await req('/v1/runs/empty/event', JSON.stringify(payload))).status, 200);
+  console.log('Ошибки, CORS, пустой набор станков и finish — OK');
+} finally { server.kill(); }

@@ -1,0 +1,14 @@
+{
+  "name": "irit-rtf-robot-factory",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Autonomous Factory Control Service & Arena Emulator for IRIT-RTF Tournament",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "sim": "node cli.mjs --seeds 20",
+    "sim:verbose": "node cli.mjs --seeds 5 --verbose"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Завод роботов — Пульт управления ИРИТ-РТФ</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #181b24;
+      --border: #2a2f3d;
+      --text: #e6e8ef;
+      --muted: #8b93a7;
+      --accent: #6c8cff;
+      --green: #34d399;
+      --red: #f87171;
+      --blue: #60a5fa;
+      --amber: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    input, select, button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #0b0d13;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    button.primary:hover { opacity: 0.9; }
+    .grid-kpi {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .kpi-val { font-size: 24px; font-weight: 700; }
+    .grid-main {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 960px) { .grid-main { grid-template-columns: 1fr; } }
+    h2 { margin: 0 0 12px 0; font-size: 15px; color: #cbd2e6; }
+    canvas { width: 100%; height: 240px; background: #12151d; border-radius: 6px; }
+    .machine-row { margin-bottom: 12px; }
+    .machine-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+    .bar-bg { height: 8px; background: #242936; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); transition: width 0.25s; }
+    .slots {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+    }
+    .slot {
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 8px 6px;
+      text-align: center;
+      font-size: 11px;
+      min-height: 54px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: #13161f;
+    }
+    .slot.occupied { border-style: solid; border-color: #3d465c; background: #1d2230; }
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .c-red { background: rgba(248,113,113,0.2); color: var(--red); }
+    .c-green { background: rgba(52,211,153,0.2); color: var(--green); }
+    .c-blue { background: rgba(96,165,250,0.2); color: var(--blue); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏭 Завод роботов — Телеметрия и Эмулятор (ИРИТ-РТФ)</h1>
+    <div class="controls">
+      <span id="healthBadge" class="badge c-green">Сервис: проверка...</span>
+      <select id="runSelect" onchange="loadSelectedRun()"></select>
+      <input type="number" id="seedInput" value="42" style="width: 90px;" title="Seed мира" />
+      <input type="number" id="horizonInput" value="650" style="width: 95px;" title="Horizon тактов" />
+      <button class="primary" onclick="runLocalSimulation()">▶ Запустить симуляцию</button>
+    </div>
+  </header>
+
+  <div class="grid-kpi">
+    <div class="card">
+      <div class="kpi-label">Чистая прибыль (баланс)</div>
+      <div class="kpi-val" id="kpiProfit" style="color: var(--green);">0.00</div>
+    </div>
+    <div class="card">
+      <div class="kpi-label">Продано роботов</div>
+      <div class="kpi-val" id="kpiSold">0</div>
+    </div>
+    <div class="card">
+      <div class="kpi-label">Выпущено роботов</div>
+      <div class="kpi-val" id="kpiProduced">—</div>
+    </div>
+    <div class="card">
+      <div class="kpi-label">Текущий такт</div>
+      <div class="kpi-val" id="kpiTick">0</div>
+    </div>
+    <div class="card">
+      <div class="kpi-label">Сравнение с Наивным ботом</div>
+      <div class="kpi-val" id="kpiCompare" style="color: var(--accent);">—</div>
+    </div>
+  </div>
+
+  <div class="grid-main">
+    <div class="card">
+      <h2>Динамика капитала по тактам</h2>
+      <canvas id="profitChart" width="760" height="240"></canvas>
+    </div>
+    <div class="card">
+      <h2>Загрузка станков</h2>
+      <div id="machinesBox"></div>
+    </div>
+  </div>
+
+  <div class="grid-main">
+    <div class="card">
+      <h2 id="warehouseTitle">Склад</h2>
+      <div class="slots" id="warehouseSlots"></div>
+    </div>
+    <div class="card">
+      <h2>Обучение по покупателям (b1–b4)</h2>
+      <table>
+        <thead>
+          <tr><th>Покупатель</th><th>Кандидаты</th><th>Оценка Pmax</th><th>Продаж</th></tr>
+        </thead>
+        <tbody id="buyersTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let currentRunId = null;
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+
+    async function checkHealth() {
+      const badge = document.getElementById('healthBadge');
+      try {
+        const res = await fetch('/v1/health');
+        const data = await res.json();
+        badge.textContent = data.status === 'ok' ? 'Сервис: ONLINE' : 'Сервис: Ошибка';
+        badge.className = 'badge c-green';
+      } catch {
+        badge.textContent = 'Сервис: OFFLINE';
+        badge.className = 'badge c-red';
+      }
+    }
+
+    async function refreshRunsList() {
+      try {
+        const res = await fetch('/api/runs');
+        const { runs } = await res.json();
+        const sel = document.getElementById('runSelect');
+        const prev = sel.value;
+        sel.innerHTML = runs.map(r =>
+          `<option value="${escapeHtml(r.runId)}">${escapeHtml(r.runId)} · ${r.finished ? 'завершён' : 'идёт'}</option>`
+        ).join('');
+        if (prev && runs.some(r => r.runId === prev)) sel.value = prev;
+        else if (runs.length > 0 && !currentRunId) {
+          sel.value = runs[0].runId;
+          await loadSelectedRun();
+        }
+      } catch {}
+    }
+
+    async function runLocalSimulation() {
+      const seed = Number(document.getElementById('seedInput').value || 42);
+      const horizon = Number(document.getElementById('horizonInput').value || 650);
+      const res = await fetch('/api/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed, horizon })
+      });
+      const data = await res.json();
+      currentRunId = data.simId;
+      await refreshRunsList();
+      document.getElementById('runSelect').value = data.simId;
+      await loadSelectedRun();
+    }
+
+    async function loadSelectedRun() {
+      const runId = document.getElementById('runSelect').value;
+      if (!runId) return;
+      currentRunId = runId;
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      renderDashboard(data);
+    }
+
+    function renderDashboard(data) {
+      const tel = data.telemetry || {};
+      const rep = tel.report || {};
+      const state = tel.lastState || {};
+      const history = tel.profitHistory || rep.history || [];
+
+      const profit = rep.profit ?? state.cash ?? state.money ?? 0;
+      document.getElementById('kpiProfit').textContent = profit.toFixed(2);
+      document.getElementById('kpiProfit').style.color = profit >= 0 ? 'var(--green)' : 'var(--red)';
+      document.getElementById('kpiSold').textContent = rep.robotsSold ?? rep.sold ?? tel.robotsSold ?? '—';
+      document.getElementById('kpiProduced').textContent = tel.robotsProduced ?? rep.robotsProduced ?? '—';
+      document.getElementById('kpiTick').textContent = state.t ?? (history.length ? history[history.length - 1].t : 0);
+
+      if (typeof tel.naiveComparison === 'number') {
+        const diff = profit - tel.naiveComparison;
+        document.getElementById('kpiCompare').textContent = `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`;
+      } else {
+        document.getElementById('kpiCompare').textContent = 'Live Arena';
+      }
+
+      drawChart(history);
+      const machineState = Array.isArray(state.machines) ? Object.fromEntries(state.machines.map(m => [m.id, { ...m, busy: m.busyUntil != null }])) : state.machines;
+      renderMachines(rep.utilization, machineState || {});
+      renderWarehouse(state.storage?.items || state.items || [], state.storage?.capacity ?? 12);
+      renderBuyers(data.buyersBelief || []);
+    }
+
+    function drawChart(history) {
+      const canvas = document.getElementById('profitChart');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      if (history.length < 2) return;
+
+      const vals = history.map(p => p.money);
+      const minV = Math.min(0, ...vals);
+      const maxV = Math.max(100, ...vals);
+      const span = Math.max(1, maxV - minV);
+
+      // Нулевая линия
+      const zeroY = h - 20 - ((0 - minV) / span) * (h - 40);
+      ctx.strokeStyle = '#2c3344';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(40, zeroY);
+      ctx.lineTo(w - 15, zeroY);
+      ctx.stroke();
+
+      // Кривая прибыли
+      ctx.strokeStyle = '#34d399';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      history.forEach((pt, idx) => {
+        const x = 40 + (idx / (history.length - 1)) * (w - 55);
+        const y = h - 20 - ((pt.money - minV) / span) * (h - 40);
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      ctx.fillStyle = '#8b93a7';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(maxV.toFixed(0), 6, 18);
+      ctx.fillText(minV.toFixed(0), 6, h - 14);
+    }
+
+    function renderMachines(util = {}, machinesState = {}) {
+      const box = document.getElementById('machinesBox');
+      const ids = ['m-cut', 'm-handles', 'm-paint', 'm-assemble'];
+      box.innerHTML = ids.map(id => {
+        const pct = util[id] ?? (machinesState[id]?.busy ? 100 : 0);
+        const status = machinesState[id]?.busy ? `Занят до ${machinesState[id].busyUntil ?? '—'}` : 'Свободен';
+        return `
+          <div class="machine-row">
+            <div class="machine-head">
+              <strong>${id}</strong>
+              <span style="color: var(--muted)">${util[id] !== undefined ? pct + '%' : status}</span>
+            </div>
+            <div class="bar-bg"><div class="bar-fill" style="width: ${Math.min(100, pct)}%"></div></div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderWarehouse(items, capacity) {
+      document.getElementById('warehouseTitle').textContent = `Склад (${items.length} / ${capacity})`;
+      const box = document.getElementById('warehouseSlots');
+      let html = '';
+      for (let i = 0; i < capacity; i++) {
+        const it = items[i];
+        if (!it) {
+          html += '<div class="slot">Свободно</div>';
+        } else {
+          const color = it.props?.color;
+          const badge = color ? `<span class="badge c-${['red', 'green', 'blue'].includes(color) ? color : 'blue'}">${escapeHtml(color)}</span>` : '';
+          const hText = it.props?.handles ? ' + ручки' : '';
+          html += `
+            <div class="slot occupied">
+              <strong>${escapeHtml(it.kind)}${hText}</strong>
+              <div style="margin-top:4px">${badge || escapeHtml(it.id)}</div>
+            </div>
+          `;
+        }
+      }
+      box.innerHTML = html;
+    }
+
+    function renderBuyers(beliefs) {
+      const tbody = document.getElementById('buyersTable');
+      tbody.innerHTML = beliefs.map(b => {
+        const hyps = b.hypotheses || [];
+        const labels = hyps.length === 1
+          ? `${escapeHtml(hyps[0].color)}${hyps[0].handles ? ' · с ручками' : ' · без ручек'}`
+          : `${hyps.length} вариантов`;
+        const pRange = hyps.length === 1
+          ? `${hyps[0].pMaxLo.toFixed(1)}–${hyps[0].pMaxHi.toFixed(1)}`
+          : '45–75';
+        return `
+          <tr>
+            <td><strong>${escapeHtml(b.buyerId)}</strong></td>
+            <td>${labels}</td>
+            <td>${pRange}</td>
+            <td>${b.salesCount}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    checkHealth();
+    refreshRunsList();
+    setInterval(() => {
+      checkHealth();
+      refreshRunsList();
+      if (currentRunId && !currentRunId.startsWith('sim-')) loadSelectedRun();
+    }, 2000);
+  </script>
+</body>
+</html>
