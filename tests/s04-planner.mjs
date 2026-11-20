@@ -70,12 +70,12 @@ test('ограничивает оценку покупателей при бол
   assert.ok(calls<=32);
 });
 
-test('прогноз учитывает суммарную выручку, включая ступень одного совпадения',()=>{
+test('прогноз не учитывает низкую ступень, когда политика продаж её не предлагает',()=>{
   const buyers=[{cooldownUntil:0,evaluateRobot:r=>r.color==='red'
     ? {expectedPrice:50,prob2Match:0,expected2MatchPrice:0}
     : {expectedPrice:10,prob2Match:0.5,expected2MatchPrice:10}}];
   const result=planProduction(make([body('red','red'),body('blue','blue'),control],{buyers}));
-  assert.deepEqual(result.commands.find(c=>c.machineId==='m-assemble').itemIds,['red','c']);
+  assert.deepEqual(result.commands.find(c=>c.machineId==='m-assemble').itemIds,['blue','c']);
 });
 
 test('лист допускается разрезать без прогноза будущей поставки control',()=>{

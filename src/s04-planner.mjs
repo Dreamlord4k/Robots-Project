@@ -51,10 +51,13 @@ export function planProduction({ start, items, machines, freeSlots, t, horizon, 
         const saleAt = Math.max(readyAt, buyer.cooldownUntil ?? 0);
         if (saleAt > horizon) continue;
         const estimate = buyer.evaluateRobot(item.props);
-        const value = Number.isFinite(estimate?.expectedPrice)
-          ? estimate.expectedPrice
-          : Number.isFinite(estimate?.prob2Match) && Number.isFinite(estimate?.expected2MatchPrice)
-            ? estimate.prob2Match * estimate.expected2MatchPrice : undefined;
+        let value = estimate?.expectedPrice;
+        if (Number.isFinite(estimate?.prob2Match) && Number.isFinite(estimate?.expected2MatchPrice)) {
+          value = estimate.prob2Match * estimate.expected2MatchPrice;
+          if (estimate.prob2Match === 0 && horizon - saleAt <= 18 && estimate.prob1Match > 0.3 && estimate.expected1MatchPrice >= 15) {
+            value = estimate.prob1Match * estimate.expected1MatchPrice;
+          }
+        }
         if (Number.isFinite(value)) best = Math.max(best, value - cost - offerFee - storageFee * (saleAt - readyAt) - 20 * duplicateCount);
       }
       return best;

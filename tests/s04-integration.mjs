@@ -5,6 +5,12 @@ import { ArenaEmulator } from '../src/engine.mjs';
 const start=new ArenaEmulator().getStartPayload();
 const state=items=>({storage:{capacity:12,free:12-items.length,items},machines:start.machines.map(m=>({id:m.id,busyUntil:null})),buyers:start.buyers.map(id=>({id,cooldownUntil:null}))});
 
+test('не закупает сырьё без оборудования',()=>{
+  const bot=new FactoryBot({...start,machines:[]});
+  const payload={seq:1,t:10,event:{type:'supply',item:{id:'s',kind:'sheet',props:{}}},state:{...state([]),machines:[]},report:[]};
+  assert.ok(!bot.handleEvent(payload).some(c=>c.type==='accept'));
+});
+
 test('недостаток бюджета отключает только производство, сохраняя доступную продажу и повтор seq',()=>{
   const bot=new FactoryBot(start,{timeBudgetMs:0});
   const items=[{id:'r',kind:'robot',props:{color:'red',handles:false}},{id:'s',kind:'sheet',props:{}},{id:'c',kind:'control',props:{}}];

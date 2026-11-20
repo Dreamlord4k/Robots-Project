@@ -493,7 +493,12 @@ export class FactoryBot {
     if (freeSlots <= 0) return false;
 
     const kind = supItem.kind;
-    const minPaint = Math.min(...COLORS.map(color => this.machinesCfg.paint[color].duration));
+    const configured = cfg => !Array.isArray(this.plannerStart.machines) || this.plannerStart.machines.some(m => m?.id === cfg.machineId && m.ops?.some(op => op.id === cfg.opId));
+    if (kind === 'sheet' && (!configured(this.machinesCfg.cut) || !configured(this.machinesCfg.assemble) || !COLORS.some(color => configured(this.machinesCfg.paint[color])))) return false;
+    if (kind === 'control' && !configured(this.machinesCfg.assemble)) return false;
+    if (kind === 'control' && !items.some(i => i.kind === 'body' && (i.props?.color || COLORS.some(color => configured(this.machinesCfg.paint[color])))) &&
+        !(configured(this.machinesCfg.cut) && COLORS.some(color => configured(this.machinesCfg.paint[color])))) return false;
+    const minPaint = Math.min(...COLORS.filter(color => configured(this.machinesCfg.paint[color])).map(color => this.machinesCfg.paint[color].duration));
     if (kind === 'sheet' && ticksLeft < this.machinesCfg.cut.duration + minPaint + this.machinesCfg.assemble.duration) return false;
     if (kind === 'control' && ticksLeft < this.machinesCfg.assemble.duration) return false;
 
