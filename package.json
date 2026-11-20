@@ -1,14 +1,17 @@
 {
   "name": "irit-rtf-robot-factory",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "Autonomous Factory Control Service & Arena Emulator for IRIT-RTF Tournament",
   "scripts": {
     "start": "node src/server.mjs",
     "sim": "node cli.mjs --seeds 20",
-    "sim:verbose": "node cli.mjs --seeds 5 --verbose"
+    "sim:verbose": "node cli.mjs --seeds 5 --verbose",
+    "test": "node --test tests/emulator-contract.mjs tests/emulator-buyers.mjs tests/emulator-timeouts.mjs tests/supply-streams.mjs tests/bot-review.mjs tests/arena-simulation.mjs tests/s04-planner.mjs tests/s04-integration.mjs tests/buyer-model.mjs tests/metrics.mjs tests/experiment.mjs tests/s03-sales.mjs tests/s04-comparison.mjs tests/s05-report.mjs tests/next-metrics.mjs tests/next-planner.mjs tests/next-buyer-model.mjs tests/next-runner.mjs tests/next-sales.mjs tests/next-supply.mjs tests/observer-hook.mjs tests/manifest.mjs tests/phase1-refusal.mjs tests/review-regressions.mjs tests/test.mjs",
+    "test:http": "node tests/arena-http.mjs && node tests/server-robustness.mjs && node tests/s04-http.mjs && node tests/buyer-model-http.mjs && node tests/http-full-shift.mjs",
+    "test:all": "npm test && npm run test:http"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }

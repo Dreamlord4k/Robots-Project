@@ -68,9 +68,12 @@ test('продажа сужает интервал pMax у совпавшего 
   assert.equal(far.possible, false, '0 совпадений закрывает гипотезу');
 });
 test('отказ по below_min_price сужает pMaxHi сверху', () => {
-  const bot = createBot(makeWorld(2).config);
-  bot.handle(body(1, 10, { type: 'sale_result', buyerId: 'b2', itemId: 'y',
-    item: robotItem('y', 'blue', false), outcome: 'refused', reason: 'below_min_price' }, baseState()));
+  const bot = createBot({ ...makeWorld(2).config, buyers: ['b2'] });
+  const item = robotItem('y', 'blue', false);
+  const offered = bot.handle(body(1, 2, { type: 'idle' }, baseState([item])));
+  assert.ok(offered.commands.some(c => c.cmd === 'offer' && c.buyerId === 'b2'));
+  bot.handle(body(2, 10, { type: 'sale_result', buyerId: 'b2', itemId: 'y',
+    item, outcome: 'refused', reason: 'below_min_price' }, baseState()));
   const h = bot.belief().get('b2').hypotheses.find((h) => h.key === 'blue:0');
   assert.ok(h.pMaxHi < 75, 'pMaxHi сужен: ' + h.pMaxHi);
 });

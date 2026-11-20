@@ -16,3 +16,14 @@ Thumbs.db
 # Local test outputs / temp data
 data/
 *.tmp
+
+# Raw experiment artifacts: keep locally, do not publish.
+# Small files needed for reproducibility stay tracked (manifest, summaries, reports).
+experiments/next/*.json
+!experiments/next/manifest.json
+!experiments/next/*summary*.json
+experiments/next/*.jsonl
+experiments/next/*.diff
+experiments/*-tune.json
+experiments/*-metrics-*.json
+experiments/s05-latency-*.bin

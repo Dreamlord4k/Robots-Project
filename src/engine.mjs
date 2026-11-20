@@ -79,12 +79,13 @@ export class ArenaEmulator {
     this.eventTimeoutMs = options.eventTimeoutMs ?? 2000;
     this.maxTimeouts = options.maxTimeouts ?? 20;
     this.now = options.now ?? (() => performance.now());
+    this.observer = options.observer ?? null;
     this.consecutiveErrors = 0;
     this.stopReason = null;
     this.storageFee = { sheet: 0.1, control: 0.1, body: 0.2, robot: 0.5 };
     this.offerFee = 1;
     this.buyerCooldown = 8;
-    this.priceCeiling = 80;
+    this.priceCeiling = 100;
     this.machinesDef = structuredClone(DEFAULT_MACHINES);
 
     this.t = 0;
@@ -247,6 +248,8 @@ export class ArenaEmulator {
       this.money -= tickStorage;
       this.stats.storageCosts += tickStorage;
 
+      this.observer?.onTick?.({ t: tick, items: structuredClone(this.items), machines: structuredClone(this.machines) });
+
       this.stats.history.push({
         t: tick,
         money: Math.round(this.money * 100) / 100,
@@ -269,6 +272,7 @@ export class ArenaEmulator {
         state: this.getPublicState(),
         report: this.previousReport
       };
+      const observedPayload = this.observer ? structuredClone(payload) : null;
       const started = this.now();
       let commands;
       let failure = null;
@@ -278,6 +282,8 @@ export class ArenaEmulator {
         failure = 'error';
       }
       const elapsedMs = this.now() - started;
+      this.observer?.onEvent?.(observedPayload, elapsedMs);
+      this.observer?.onAfterDecision?.(this.t);
       if (elapsedMs > this.eventTimeoutMs) failure = 'timeout';
       else if (!failure && !Array.isArray(commands)) failure = 'error';
       if (failure) {
@@ -290,7 +296,9 @@ export class ArenaEmulator {
       } else {
         this.consecutiveErrors = 0;
       }
-      this.previousReport = this.executeCommands(commands.slice(0, 50));
+      const executedCommands = commands.slice(0, 50);
+      this.previousReport = this.executeCommands(executedCommands);
+      this.observer?.onCommands?.(executedCommands, this.previousReport);
       // Поставка доступна только при обработке её собственного события.
       this.currentSupply = null;
       nextEvent = this.pendingSales.shift()?.event;
@@ -406,8 +414,11 @@ export class ArenaEmulator {
           props: outProps
         };
 
+        // Спецификация v1 гарантирует duration > 0; для устойчивости эмулятора
+        // нулевая/отсутствующая длительность не должна подвешивать станок навсегда.
+        const duration = Number.isFinite(opDef.duration) && opDef.duration > 0 ? opDef.duration : 1;
         m.busy = true;
-        m.busyUntil = this.t + opDef.duration;
+        m.busyUntil = this.t + duration;
         m.currentOp = { opId: cmd.opId, outputItem };
         this.money -= opDef.cost;
         this.stats.opCosts += opDef.cost;
