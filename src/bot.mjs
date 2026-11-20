@@ -1,3 +1,5 @@
+import { planProduction } from './s04-planner.mjs';
+
 const COLORS = ['red', 'green', 'blue'];
 const ARCHETYPES = [
   { key: 'red:0', color: 'red', handles: false },
@@ -81,88 +83,60 @@ function parseMachinesConfig(rawMachines) {
  * Модель знаний о скрытых параметрах покупателя (изолирована строго внутри одного runId)
  */
 class BuyerBelief {
-  constructor(buyerId) {
+  constructor(buyerId, priceCeiling = 80) {
     this.buyerId = buyerId;
+    this.priceCeiling = Number.isFinite(priceCeiling) && priceCeiling >= 0 ? priceCeiling : 80;
+    // Диапазон v1 — априорное допущение; потолок из start ограничивает цены.
+    this.priorHi = Math.min(75, (this.priceCeiling + 0.005) / 0.98);
+    this.priorLo = this.priorHi < 45 ? 0 : 45;
     this.cooldownUntil = 0;
     this.salesCount = 0;
     this.offersCount = 0;
     this.hypotheses = ARCHETYPES.map(arch => ({
       ...arch,
       possible: true,
-      pMaxLo: 45.0,
-      pMaxHi: 75.0,
+      pMaxLo: this.priorLo,
+      pMaxHi: this.priorHi,
       fLo: 0.3,
       fHi: 0.6
     }));
   }
 
   updateOnSaleResult(item, outcome, price, minPriceUsed) {
-    if (!item || !item.props || !item.props.color) return;
-    const robotArch = { color: item.props.color, handles: Boolean(item.props.handles) };
+    if (!COLORS.includes(item?.props?.color) || typeof item?.props?.handles !== 'boolean') return;
+    const robotArch = item.props;
+    const sold = outcome === 'sold' && Number.isFinite(price) && price >= 0;
+    const refused = outcome === 'refused' && Number.isFinite(minPriceUsed) && minPriceUsed > 0;
+    if (!sold && !refused) return;
 
-    if (outcome === 'sold' && typeof price === 'number' && price > 0) {
-      this.salesCount++;
-      for (const h of this.hypotheses) {
-        if (!h.possible) continue;
-        const dist = hammingDistance(robotArch, h);
-        if (dist === 2) {
-          // 0 совпадений всегда дают цену 0
-          h.possible = false;
-        } else if (dist === 0) {
-          // price = Pmax * (1 ± 0.02)
-          h.pMaxLo = Math.max(h.pMaxLo, price / 1.02);
-          h.pMaxHi = Math.min(h.pMaxHi, price / 0.98);
-          if (h.pMaxLo > h.pMaxHi + 1e-4) {
-            h.possible = false;
-          }
-        } else if (dist === 1) {
-          // price = Pmax * f * (1 ± 0.02)
-          const prodLo = price / 1.02;
-          const prodHi = price / 0.98;
-          if (prodLo > 75.0 * 0.6 + 1e-4 || prodHi < 45.0 * 0.3 - 1e-4) {
-            h.possible = false;
-          } else {
-            h.fLo = Math.max(h.fLo, prodLo / h.pMaxHi);
-            h.fHi = Math.min(h.fHi, prodHi / h.pMaxLo);
-            h.pMaxLo = Math.max(h.pMaxLo, prodLo / h.fHi);
-            h.pMaxHi = Math.min(h.pMaxHi, prodHi / h.fLo);
-            if (h.fLo > h.fHi + 1e-4 || h.pMaxLo > h.pMaxHi + 1e-4) {
-              h.possible = false;
-            }
-          }
-        }
+    // Интервалы округления консервативны: цена могла быть округлена до копеек.
+    const lo = sold ? Math.max(0, price - 0.005) / 1.02 : 0;
+    const hi = sold ? (price + 0.005) / 0.98 : (minPriceUsed + 0.005) / 0.98;
+    const next = this.hypotheses.map(h => ({ ...h }));
+    for (const h of next) {
+      if (!h.possible) continue;
+      const dist = hammingDistance(robotArch, h);
+      if (dist === 2) {
+        if (sold && price > 0.005) h.possible = false;
+      } else if (dist === 0) {
+        if (sold) h.pMaxLo = Math.max(h.pMaxLo, lo);
+        h.pMaxHi = Math.min(h.pMaxHi, hi);
+      } else {
+        if (sold && lo > h.pMaxHi * h.fHi) h.possible = false;
+        if (sold && hi < h.pMaxLo * h.fLo) h.possible = false;
+        if (sold && h.pMaxHi > 0) h.fLo = Math.max(h.fLo, lo / h.pMaxHi);
+        if (h.pMaxLo > 0) h.fHi = Math.min(h.fHi, hi / h.pMaxLo);
+        if (sold && h.fHi > 0) h.pMaxLo = Math.max(h.pMaxLo, lo / h.fHi);
+        if (h.fLo > 0) h.pMaxHi = Math.min(h.pMaxHi, hi / h.fLo);
       }
-    } else if (outcome === 'refused') {
-      const threshold = typeof minPriceUsed === 'number' ? minPriceUsed : 44.0;
-      for (const h of this.hypotheses) {
-        if (!h.possible) continue;
-        const dist = hammingDistance(robotArch, h);
-        if (dist === 0) {
-          // Отказ означает actualPrice < threshold => Pmax * 0.98 < threshold
-          h.pMaxHi = Math.min(h.pMaxHi, threshold / 0.98);
-          if (h.pMaxHi < 45.0 - 1e-4) {
-            h.possible = false;
-          }
-        } else if (dist === 1) {
-          // Pmax * f * 0.98 < threshold
-          const maxProd = threshold / 0.98;
-          h.fHi = Math.min(h.fHi, maxProd / h.pMaxLo);
-          if (h.fHi < 0.3 - 1e-4) {
-            h.possible = false;
-          }
-        }
-      }
+      if (h.pMaxLo > h.pMaxHi + 1e-9 || h.fLo > h.fHi + 1e-9) h.possible = false;
     }
-
-    // Страховка от вырождения при экстремальных шумах
-    if (!this.hypotheses.some(h => h.possible)) {
-      for (const h of this.hypotheses) {
-        h.possible = true;
-        h.pMaxLo = 45.0;
-        h.pMaxHi = 75.0;
-        h.fLo = 0.3;
-        h.fHi = 0.6;
-      }
+    // Противоречие с моделью не доказывает, какое наблюдение неверно.
+    if (next.some(h => h.possible)) {
+      this.hypotheses = next;
+      if (sold) this.salesCount++;
+    } else {
+      this.contradictions = (this.contradictions ?? 0) + 1;
     }
   }
 
@@ -198,19 +172,24 @@ class BuyerBelief {
     if (prob1Match > 0) expected1MatchPrice /= prob1Match;
 
     return {
-      expectedPrice,
+      expectedPrice: Math.min(this.priceCeiling, expectedPrice),
       prob2Match,
       prob1Match,
-      min2MatchPrice: min2MatchPrice === Infinity ? 44.0 : min2MatchPrice,
-      expected2MatchPrice,
-      expected1MatchPrice,
+      min2MatchPrice: Math.min(this.priceCeiling, min2MatchPrice === Infinity ? this.priceCeiling : min2MatchPrice),
+      expected2MatchPrice: Math.min(this.priceCeiling, expected2MatchPrice),
+      expected1MatchPrice: Math.min(this.priceCeiling, expected1MatchPrice),
       uncertainty: valid.length
     };
   }
 }
 
 export class FactoryBot {
-  constructor(startParams = {}) {
+  constructor(startParams = {}, plannerOptions = {}) {
+    this.plannerStats = { calls: 0, exhausted: 0 };
+    this.plannerStart = startParams;
+    this.eventTimeoutMs = startParams.eventTimeoutMs ?? 2000;
+    this.plannerTimeMs = plannerOptions.timeBudgetMs ?? 5;
+    this.plannerMaxCandidates = plannerOptions.maxCandidates ?? 1024;
     this.horizon = startParams.horizon ?? 650;
     this.capacity = startParams.capacity ?? 12;
     this.storageFee = startParams.storageFee ?? { sheet: 0.1, control: 0.1, body: 0.2, robot: 0.5 };
@@ -218,19 +197,14 @@ export class FactoryBot {
     this.buyerCooldown = startParams.buyerCooldown ?? 8;
     this.priceCeiling = startParams.priceCeiling ?? 80;
     this.machinesCfg = parseMachinesConfig(startParams.machines);
-    // Если start явно задаёт станки, вымышленные значения по умолчанию недопустимы.
-    this.productionAvailable = !Array.isArray(startParams.machines) || [
-      this.machinesCfg.cut, this.machinesCfg.handles, this.machinesCfg.assemble,
-      ...COLORS.map(color => this.machinesCfg.paint[color])
-    ].every(cfg => startParams.machines.some(m => m?.id === cfg.machineId && Array.isArray(m.ops) && m.ops.some(op => op?.id === cfg.opId)));
-
     const rawBuyers = startParams.buyers || ['b1', 'b2', 'b3', 'b4'];
     this.buyers = new Map();
     for (const b of rawBuyers) {
       const id = typeof b === 'string' ? b : b.id;
-      this.buyers.set(id, new BuyerBelief(id));
+      this.buyers.set(id, new BuyerBelief(id, this.priceCeiling));
     }
 
+    this.lastOfferItems = new Map(); // копия предложенного робота для необязательного item
     this.lastOfferMinPrice = new Map(); // buyerId#itemId -> minPrice
     this.machineBusyUntil = new Map(); // machineId -> tick
     this.machineInFlight = new Map(); // machineId -> { opId, kind, color, handles, finishTick }
@@ -239,6 +213,7 @@ export class FactoryBot {
   }
 
   handleEvent(payload) {
+    const eventStarted = performance.now();
     const seq = payload?.seq;
     if (seq !== undefined && this.seqCache.has(seq)) {
       return this.seqCache.get(seq);
@@ -257,6 +232,7 @@ export class FactoryBot {
         this.machineInFlight.delete(previous.machineId);
       } else if (previous?.type === 'offer') {
         this.lastOfferMinPrice.delete(`${previous.buyerId}#${previous.itemId}`);
+        this.lastOfferItems.delete(`${previous.buyerId}#${previous.itemId}`);
         const buyer = this.buyers.get(previous.buyerId);
         const buyerState = Array.isArray(state.buyers) ? state.buyers.find(b => b.id === previous.buyerId) : state.buyers?.[previous.buyerId];
         if (buyer) {
@@ -264,12 +240,6 @@ export class FactoryBot {
           buyer.offersCount = Math.max(0, buyer.offersCount - 1);
         }
       }
-    }
-
-    if (!this.productionAvailable) {
-      this.previousCommands = [];
-      if (seq !== undefined) this.seqCache.set(seq, []);
-      return [];
     }
 
     // 1. Обработка входящего события для обновления внутренних знаний
@@ -282,11 +252,16 @@ export class FactoryBot {
     } else if (evType === 'sale_result') {
       const buyer = this.buyers.get(event.buyerId);
       if (buyer) {
-        buyer.cooldownUntil = t + this.buyerCooldown;
+        if (event.reason !== 'cooldown') buyer.cooldownUntil = t + this.buyerCooldown;
         const key = `${event.buyerId}#${event.itemId}`;
-        const minUsed = this.lastOfferMinPrice.get(key) ?? 44.0;
+        const minUsed = this.lastOfferMinPrice.get(key);
+        const offeredItem = this.lastOfferItems.get(key);
         this.lastOfferMinPrice.delete(key);
-        if (event.reason !== 'cooldown') buyer.updateOnSaleResult(event.item, event.outcome, event.price, minUsed);
+        this.lastOfferItems.delete(key);
+        const item = event.item ?? offeredItem;
+        if (event.outcome === 'sold' || (event.outcome === 'refused' && event.reason === 'below_min_price')) {
+          buyer.updateOnSaleResult(item, event.outcome, event.price, minUsed);
+        }
       }
     }
 
@@ -343,9 +318,6 @@ export class FactoryBot {
     const reservedItemIds = new Set();
     const ticksLeft = Math.max(0, this.horizon - t);
 
-    // 3. Оценка спроса на каждый из 6 архетипов роботов
-    const demandMap = this.computeArchetypeDemands(t, items);
-
     // 4. Обработка поставки (supply)
     if (evType === 'supply' && event.item) {
       const supItem = {
@@ -362,215 +334,34 @@ export class FactoryBot {
       }
     }
 
-    // 5. Планирование станков (от финиша к старту для разгрузки склада)
-
-    // 5A. m-assemble: [body(colored), control] -> robot
-    const asmCfg = this.machinesCfg.assemble;
-    if (!busyMachines.has(asmCfg.machineId) && ticksLeft >= asmCfg.duration) {
-      const availControls = items.filter(i => i.kind === 'control' && !reservedItemIds.has(i.id));
-      const availBodies = items.filter(
-        i => i.kind === 'body' && i.props.color && !reservedItemIds.has(i.id)
-      );
-
-      if (availControls.length > 0 && availBodies.length > 0) {
-        // Выбираем тело, которое нужно прямо сейчас и готово к сборке
-        let bestBody = null;
-        let bestScore = -Infinity;
-
-        for (const body of availBodies) {
-          const archKey = archetypeKey(body.props.color, body.props.handles);
-          const demand = demandMap.get(archKey);
-          const needsHandlesLater =
-            !body.props.color && !body.props.handles &&
-            (demandMap.get(archetypeKey(body.props.color, true))?.score ?? 0) >
-              (demand?.score ?? 0) * 1.25;
-
-          // Если телу лучше сначала приделать ручки, и станок ручек свободен (или есть время) — ждём
-          if (needsHandlesLater && ticksLeft >= asmCfg.duration + this.machinesCfg.handles.duration + 1) {
-            continue;
-          }
-
-          const score = (demand?.immediateSaleScore ?? 0) * 2 + (demand?.score ?? 0);
-          if (score > bestScore && (demand?.maxPossiblePrice ?? 0) > 0) {
-            bestScore = score;
-            bestBody = body;
-          }
-        }
-
-        // Если подходящего не нашлось, но склад забит или конец смены — собираем лучшее доступное
-        if (!bestBody && (freeSlots <= 1 || ticksLeft <= asmCfg.duration + 2)) {
-          availBodies.sort((a, b) => {
-            const sa = demandMap.get(archetypeKey(a.props.color, a.props.handles))?.score ?? 0;
-            const sb = demandMap.get(archetypeKey(b.props.color, b.props.handles))?.score ?? 0;
-            return sb - sa;
-          });
-          if ((demandMap.get(archetypeKey(availBodies[0].props.color, availBodies[0].props.handles))?.maxPossiblePrice ?? 0) > 0) {
-            bestBody = availBodies[0];
-          }
-        }
-
-        if (bestBody) {
-          const ctrl = availControls[0];
-          const itemIds = asmCfg.bodyFirst ? [bestBody.id, ctrl.id] : [ctrl.id, bestBody.id];
-          commands.push({
-            type: 'start',
-            machineId: asmCfg.machineId,
-            opId: asmCfg.opId,
-            itemIds
-          });
-          reservedItemIds.add(bestBody.id);
-          reservedItemIds.add(ctrl.id);
-          busyMachines.add(asmCfg.machineId);
-          this.machineBusyUntil.set(asmCfg.machineId, t + asmCfg.duration);
-          this.machineInFlight.set(asmCfg.machineId, {
-            opId: asmCfg.opId,
-            kind: 'robot',
-            color: bestBody.props.color,
-            handles: Boolean(bestBody.props.handles),
-            finishTick: t + asmCfg.duration
-          });
-          // 2 предмета ушли со склада, 1 место зарезервировано под результат => +1 свободное место
-          freeSlots += 1;
-        }
-      }
+    // 5. Ограниченный прогноз; при нехватке бюджета — без производственных команд.
+    const states = (Array.isArray(state.machines) ? state.machines : []).map(m => {
+      if (!busyMachines.has(m.id)) return { id: m.id, busyUntil: null };
+      return { id: m.id, busyUntil: Math.max(t, m.busyUntil ?? this.machineBusyUntil.get(m.id) ?? t + 1) };
+    });
+    for (const id of busyMachines) {
+      if (!states.some(m => m.id === id)) states.push({ id, busyUntil: this.machineBusyUntil.get(id) ?? t + 1 });
     }
-
-    // 5B. m-handles: body(handles: false) -> body(handles: true, inherit color)
-    const hndCfg = this.machinesCfg.handles;
-    if (!busyMachines.has(hndCfg.machineId) && ticksLeft >= hndCfg.duration + asmCfg.duration) {
-      const noHandleBodies = items.filter(
-        i => i.kind === 'body' && !i.props.color && !i.props.handles && !reservedItemIds.has(i.id)
-      );
-
-      let targetBody = null;
-      let bestGain = 0;
-
-      for (const body of noHandleBodies) {
-        if (body.props.color) {
-          // Окрашенное тело без ручек: проверяем, выгоднее ли добавить ручки
-          const withoutH = demandMap.get(archetypeKey(body.props.color, false))?.score ?? 0;
-          const withH = demandMap.get(archetypeKey(body.props.color, true))?.score ?? 0;
-          const gain = withH - withoutH;
-          if (gain > 2.5 && gain > bestGain) {
-            bestGain = gain;
-            targetBody = body;
-          }
-        } else {
-          // Неокрашенное тело: ставим ручки заранее, если m-paint занят и ручки нужны для топ-архетипа
-          const paintBusy = busyMachines.has(this.machinesCfg.paint.red.machineId);
-          const bestWithH = Math.max(
-            ...COLORS.map(c => demandMap.get(archetypeKey(c, true))?.score ?? 0)
-          );
-          const bestNoH = Math.max(
-            ...COLORS.map(c => demandMap.get(archetypeKey(c, false))?.score ?? 0)
-          );
-          if ((paintBusy || noHandleBodies.length >= 2) && bestWithH >= bestNoH * 0.9 && bestWithH > 10) {
-            const gain = bestWithH * 0.5;
-            if (gain > bestGain) {
-              bestGain = gain;
-              targetBody = body;
-            }
-          }
-        }
-      }
-
-      if (targetBody) {
-        commands.push({
-          type: 'start',
-          machineId: hndCfg.machineId,
-          opId: hndCfg.opId,
-          itemIds: [targetBody.id]
-        });
-        reservedItemIds.add(targetBody.id);
-        busyMachines.add(hndCfg.machineId);
-        this.machineBusyUntil.set(hndCfg.machineId, t + hndCfg.duration);
-        this.machineInFlight.set(hndCfg.machineId, {
-          opId: hndCfg.opId,
-          kind: 'body',
-          color: targetBody.props.color ?? null,
-          handles: true,
-          finishTick: t + hndCfg.duration
-        });
-      }
-    }
-
-    // 5C. m-paint: body(color: null) -> body(color: c, inherit handles)
-    const anyPaintMachineId = this.machinesCfg.paint.red.machineId;
-    if (!busyMachines.has(anyPaintMachineId) && ticksLeft >= 3 + asmCfg.duration) {
-      const unpaintedBodies = items.filter(
-        i => i.kind === 'body' && !i.props.color && !reservedItemIds.has(i.id)
-      );
-      const paintedBodiesCount = items.filter(i => i.kind === 'body' && i.props.color).length;
-      const assembleBusy = busyMachines.has(asmCfg.machineId);
-
-      // Буфер-контроль (Level 3): не красим, если сборка занята и склад уже забит окрашенными телами
-      const bufferBlocked = assembleBusy && (paintedBodiesCount >= 2 || freeSlots <= 1);
-
-      if (unpaintedBodies.length > 0 && !bufferBlocked) {
-        // Предпочитаем тело, у которого уже есть нужные handles, или выбираем лучший цвет под тело
-        let bestChoice = null;
-        let bestScore = -Infinity;
-
-        for (const body of unpaintedBodies) {
-          const hasH = Boolean(body.props.handles);
-          for (const color of COLORS) {
-            const directScore = demandMap.get(archetypeKey(color, hasH))?.score ?? 0;
-            const withHandlesLaterScore = !hasH
-              ? (demandMap.get(archetypeKey(color, true))?.score ?? 0) - 2.0
-              : -Infinity;
-            const effectiveScore = Math.max(directScore, withHandlesLaterScore);
-
-            if (effectiveScore > bestScore) {
-              bestScore = effectiveScore;
-              bestChoice = { body, color };
-            }
-          }
-        }
-
-        if (bestChoice && bestScore > 0) {
-          const pCfg = this.machinesCfg.paint[bestChoice.color];
-          commands.push({
-            type: 'start',
-            machineId: pCfg.machineId,
-            opId: pCfg.opId,
-            itemIds: [bestChoice.body.id]
-          });
-          reservedItemIds.add(bestChoice.body.id);
-          busyMachines.add(pCfg.machineId);
-          this.machineBusyUntil.set(pCfg.machineId, t + pCfg.duration);
-          this.machineInFlight.set(pCfg.machineId, {
-            opId: pCfg.opId,
-            kind: 'body',
-            color: bestChoice.color,
-            handles: Boolean(bestChoice.body.props.handles),
-            finishTick: t + pCfg.duration
-          });
-        }
-      }
-    }
-
-    // 5D. m-cut: sheet -> body(null, false)
-    const cutCfg = this.machinesCfg.cut;
-    if (!busyMachines.has(cutCfg.machineId) && ticksLeft >= cutCfg.duration + 6) {
-      const availSheets = items.filter(i => i.kind === 'sheet' && !reservedItemIds.has(i.id));
-      if (availSheets.length > 0) {
-        commands.push({
-          type: 'start',
-          machineId: cutCfg.machineId,
-          opId: cutCfg.opId,
-          itemIds: [availSheets[0].id]
-        });
-        reservedItemIds.add(availSheets[0].id);
-        busyMachines.add(cutCfg.machineId);
-        this.machineBusyUntil.set(cutCfg.machineId, t + cutCfg.duration);
-        this.machineInFlight.set(cutCfg.machineId, {
-          opId: cutCfg.opId,
-          kind: 'body',
-          color: null,
-          handles: false,
-          finishTick: t + cutCfg.duration
-        });
-      }
+    const remainingTime = Math.max(0, this.eventTimeoutMs * 0.5 - (performance.now() - eventStarted));
+    const plan = planProduction({ start: this.plannerStart, items, machines: states, freeSlots, t,
+      horizon: this.horizon, buyers: [...this.buyers.values()], inFlight: [...this.machineInFlight.values()].map(inf => ({ kind: inf.kind, props: { color: inf.color, handles: inf.handles } })), maxCandidates: this.plannerMaxCandidates,
+      timeBudgetMs: Math.min(this.plannerTimeMs, remainingTime) });
+    this.plannerStats.calls++;
+    if (plan.exhausted) this.plannerStats.exhausted++;
+    for (const command of plan.commands) {
+      const machine = this.plannerStart.machines?.find(m => m.id === command.machineId);
+      const op = machine?.ops?.find(o => o.id === command.opId);
+      if (!op) continue;
+      const inputs = command.itemIds.map(id => items.find(item => item.id === id));
+      const inherited = Number.isInteger(op.inherit) ? inputs[op.inherit]?.props : null;
+      const props = { ...(inherited || {}), ...(op.output?.props || {}) };
+      commands.push(command);
+      for (const id of command.itemIds) reservedItemIds.add(id);
+      busyMachines.add(command.machineId);
+      this.machineBusyUntil.set(command.machineId, t + op.duration);
+      this.machineInFlight.set(command.machineId, { opId: op.id, kind: op.output.kind,
+        color: props.color ?? null, handles: Boolean(props.handles), finishTick: t + op.duration });
+      freeSlots += command.itemIds.length - 1;
     }
 
     // 6. Продажи роботов (оптимальное паросочетание buyer <-> robot)
@@ -587,7 +378,10 @@ export class FactoryBot {
           minPrice: off.minPrice
         });
         reservedItemIds.add(off.itemId);
-        this.lastOfferMinPrice.set(`${off.buyerId}#${off.itemId}`, off.minPrice);
+        const offerKey = `${off.buyerId}#${off.itemId}`;
+        this.lastOfferMinPrice.set(offerKey, off.minPrice);
+        const offeredRobot = robots.find(robot => robot.id === off.itemId);
+        if (offeredRobot) this.lastOfferItems.set(offerKey, { id: offeredRobot.id, kind: offeredRobot.kind, props: { ...offeredRobot.props } });
         const b = this.buyers.get(off.buyerId);
         if (b) {
           b.cooldownUntil = t + this.buyerCooldown;
@@ -699,8 +493,9 @@ export class FactoryBot {
     if (freeSlots <= 0) return false;
 
     const kind = supItem.kind;
-    if (kind === 'sheet' && ticksLeft < 9) return false;
-    if (kind === 'control' && ticksLeft < 4) return false;
+    const minPaint = Math.min(...COLORS.map(color => this.machinesCfg.paint[color].duration));
+    if (kind === 'sheet' && ticksLeft < this.machinesCfg.cut.duration + minPaint + this.machinesCfg.assemble.duration) return false;
+    if (kind === 'control' && ticksLeft < this.machinesCfg.assemble.duration) return false;
 
     // Подсчёт баланса sheet-ветки и control-ветки в системе
     let sheetSide = items.filter(i => i.kind === 'sheet' || i.kind === 'body').length;
@@ -750,7 +545,7 @@ export class FactoryBot {
 
         // 1. Точное или высоковероятное 2-совпадение (или разведка возможного 2-совпадения)
         if (ev.prob2Match > 0) {
-          const reserve = Math.max(43.5, Math.min(73.0, Math.floor(ev.min2MatchPrice * 10) / 10));
+          const reserve = Math.min(this.priceCeiling, Math.max(43.5, Math.min(73.0, Math.floor(ev.min2MatchPrice * 10) / 10)));
           // Приоритет: подтверждённые продажи выше разведки
           const utility =
             ev.prob2Match * ev.expected2MatchPrice -
@@ -761,7 +556,7 @@ export class FactoryBot {
 
         // 2. В конце смены или при переполнении склада — продаём 1-совпадение по Pmax*f
         if ((endGame || warehouseCrowded) && ev.prob1Match > 0.3 && ev.expected1MatchPrice >= 15.0) {
-          const reserve = 13.0;
+          const reserve = Math.min(this.priceCeiling, 13.0);
           const utility = ev.prob1Match * ev.expected1MatchPrice - this.offerFee - 5.0;
           return { utility, minPrice: reserve };
         }
