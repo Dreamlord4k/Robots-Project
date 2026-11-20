@@ -63,3 +63,20 @@ test('wildcard требует заданного значения, а null до�
   assert.equal(em.executeCommands([{ cmd: 'start', machineId: 'm-assemble', opId: 'assemble', itemIds: ['body', 'control'] }])[0].reason, 'bad_inputs');
   assert.equal(em.executeCommands([{ cmd: 'start', machineId: 'm-handles', opId: 'add-handles', itemIds: ['body'] }])[0].ok, true);
 });
+
+test('priceCeiling по умолчанию 100, как в спецификации', () => {
+  const em = new ArenaEmulator({ seed: 1, horizon: 0 });
+  assert.equal(em.getStartPayload().priceCeiling, 100);
+});
+
+test('нулевая длительность не подвешивает станок', () => {
+  const em = new ArenaEmulator({ seed: 1, horizon: 2 });
+  em.machinesDef['m-cut'].ops.cut.duration = 0;
+  em.items.push({ id: 's', kind: 'sheet', props: {} });
+  const report = em.executeCommands([{ cmd: 'start', machineId: 'm-cut', opId: 'cut', itemIds: ['s'] }]);
+  assert.equal(report[0].ok, true);
+  assert.equal(em.machines['m-cut'].busyUntil, 1);
+  em.runFullShift({ handleEvent() { return []; } });
+  assert.equal(em.stats.invalidCommands.length, 0);
+  assert.ok(em.items.some(item => item.kind === 'body'), 'результат появился на складе');
+});

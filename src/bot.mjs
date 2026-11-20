@@ -110,8 +110,11 @@ class BuyerBelief {
     if (!sold && !refused) return;
 
     // Интервалы округления консервативны: цена могла быть округлена до копеек.
+    // Ставка может иметь доли копейки; отказ относится к округлённой цене.
     const lo = sold ? Math.max(0, price - 0.005) / 1.02 : 0;
-    const hi = sold ? (price + 0.005) / 0.98 : (minPriceUsed + 0.005) / 0.98;
+    const maxRefusedRounded = (Math.ceil(minPriceUsed * 100) - 1) / 100;
+    const refusalBound = Math.max(minPriceUsed, maxRefusedRounded + 0.005);
+    const hi = sold ? (price + 0.005) / 0.98 : refusalBound / 0.98;
     const next = this.hypotheses.map(h => ({ ...h }));
     for (const h of next) {
       if (!h.possible) continue;
@@ -121,6 +124,11 @@ class BuyerBelief {
       } else if (dist === 0) {
         if (sold) h.pMaxLo = Math.max(h.pMaxLo, lo);
         h.pMaxHi = Math.min(h.pMaxHi, hi);
+        // Отказ при ставке на нижней границе доказывает, что точного совпадения нет:
+        // минимально возможная цена 2-совпадения равна pMaxLo*(1-0.02), то есть самой ставке.
+        // Без этого гипотеза остаётся с интервалом [pMaxLo, pMaxLo+0.005] и пара
+        // опрашивается повторно каждые buyerCooldown тактов.
+        if (refused && hi <= h.pMaxLo + 1e-9) h.possible = false;
       } else {
         if (sold && lo > h.pMaxHi * h.fHi) h.possible = false;
         if (sold && hi < h.pMaxLo * h.fLo) h.possible = false;
@@ -190,6 +198,10 @@ export class FactoryBot {
     this.eventTimeoutMs = startParams.eventTimeoutMs ?? 2000;
     this.plannerTimeMs = plannerOptions.timeBudgetMs ?? 5;
     this.plannerMaxCandidates = plannerOptions.maxCandidates ?? 1024;
+    // Надбавки к полезности предложения: подтверждённая пара против разведочной.
+    // Значения по умолчанию сохраняют поведение; S11 проверяет абляцию.
+    this.offerBonusConfirmed = plannerOptions.offerBonusConfirmed ?? 12;
+    this.offerBonusUncertain = plannerOptions.offerBonusUncertain ?? 6;
     this.horizon = startParams.horizon ?? 650;
     this.capacity = startParams.capacity ?? 12;
     this.storageFee = startParams.storageFee ?? { sheet: 0.1, control: 0.1, body: 0.2, robot: 0.5 };
@@ -538,7 +550,7 @@ export class FactoryBot {
   /**
    * Поиск максимального по ожидаемой прибыли паросочетания роботов и свободных покупателей
    */
-  planBestOffers(t, ticksLeft, freeSlots, robots, readyBuyers) {
+  planBestOffers(t, ticksLeft, freeSlots, robots, readyBuyers, allowPair = null) {
     const endGame = ticksLeft <= 18;
     const warehouseCrowded = freeSlots <= 1 && robots.length >= 2;
 
@@ -546,6 +558,7 @@ export class FactoryBot {
     const candidates = robots.map(rob => {
       const arch = { color: rob.props.color, handles: Boolean(rob.props.handles) };
       return readyBuyers.map(buyer => {
+        if (allowPair && !allowPair(rob, buyer)) return null;
         const ev = buyer.evaluateRobot(arch);
 
         // 1. Точное или высоковероятное 2-совпадение (или разведка возможного 2-совпадения)
@@ -555,7 +568,7 @@ export class FactoryBot {
           const utility =
             ev.prob2Match * ev.expected2MatchPrice -
             this.offerFee +
-            (buyer.uncertainty > 1 ? 6.0 : 12.0);
+            (buyer.uncertainty > 1 ? this.offerBonusUncertain : this.offerBonusConfirmed);
           return { utility, minPrice: reserve };
         }
 

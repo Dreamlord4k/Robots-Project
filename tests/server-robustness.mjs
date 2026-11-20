@@ -30,9 +30,18 @@ try {
   const finished = await (await fetch(base + '/api/runs/empty')).json();
   assert.deepEqual(finished.buyersBelief, []);
   const after = await req('/v1/runs/empty/event', JSON.stringify(payload));
-  assert.equal(after.status, 409);
+  assert.equal(after.status, 200);
+  assert.deepEqual(await after.json(), { commands: [] }, 'известный seq после finish возвращает сохранённый ответ');
+  const late = await req('/v1/runs/empty/event', JSON.stringify({ ...payload, seq: 2 }));
+  assert.equal(late.status, 409, 'новый seq после finish отклоняется');
   assert.equal((await req('/v1/runs/empty/finish', '{}')).status, 200);
   assert.equal((await req('/v1/runs/empty/start', JSON.stringify({ horizon: 600, capacity: 12, buyers: [], machines: [] }))).status, 200);
   assert.equal((await req('/v1/runs/empty/event', JSON.stringify(payload))).status, 200);
-  console.log('Ошибки, CORS, пустой набор станков и finish — OK');
+  const big = await req('/v1/runs/big/start', JSON.stringify({ filler: 'x'.repeat(3 * 1024 * 1024) }));
+  assert.equal(big.status, 413);
+  assert.equal((await big.json()).error.code, 'payload_too_large');
+  assert.equal((await req('/api/simulate', JSON.stringify({ horizon: 100000 }))).status, 400);
+  assert.equal((await req('/api/simulate', JSON.stringify({ seed: 1.5 }))).status, 400);
+  assert.equal((await req('/api/simulate', JSON.stringify({ seed: 1, horizon: 20 }))).status, 200);
+  console.log('Ошибки, CORS, пустой набор станков, finish, идемпотентность и лимиты — OK');
 } finally { server.kill(); }

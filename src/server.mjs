@@ -8,6 +8,8 @@ import { ArenaEmulator } from './engine.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const LOG_DIR = path.join(__dirname, '..', 'logs');
+const DASHBOARD = process.env.ENABLE_DASHBOARD !== '0';
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
@@ -27,11 +29,19 @@ function sendJson(res, statusCode, data) {
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
+    let failed = false;
     req.on('data', chunk => {
+      if (failed) return;
       raw += chunk;
-      if (raw.length > 2 * 1024 * 1024) reject(new Error('Payload too large'));
+      if (raw.length > MAX_BODY_BYTES) {
+        failed = true;
+        raw = '';
+        reject(new Error('Payload too large'));
+        req.resume();
+      }
     });
     req.on('end', () => {
+      if (failed) return;
       if (!raw) return resolve({});
       try {
         resolve(JSON.parse(raw));
@@ -79,7 +89,10 @@ async function handleRequest(req, res) {
     let body = {};
     try {
       body = await readJsonBody(req);
-    } catch {
+    } catch (err) {
+      if (err?.message === 'Payload too large') {
+        return sendJson(res, 413, { error: { code: 'payload_too_large', message: 'Тело запроса больше 2 МБ' } });
+      }
       return sendJson(res, 400, { error: { code: 'invalid_json', message: 'Некорректный JSON' } });
     }
 
@@ -98,6 +111,7 @@ async function handleRequest(req, res) {
         startedAt: new Date().toISOString(),
         finished: false,
         bot,
+        seqResponses: new Map(),
         telemetry: {
           profitHistory: [],
           lastState: null,
@@ -116,7 +130,13 @@ async function handleRequest(req, res) {
 
     if (action === 'event') {
       const t0 = performance.now();
+      const seq = body.seq ?? Number(req.headers['x-arena-seq'] || 0);
       let record = runs.get(runId);
+      // Идемпотентность сохраняется и после finish: известный seq возвращает
+      // сохранённый ответ, новый seq для завершённого прогона — 409.
+      if (record?.seqResponses?.has(seq)) {
+        return sendJson(res, 200, { commands: record.seqResponses.get(seq) });
+      }
       if (record?.finished) return sendJson(res, 409, { error: { code: 'run_finished', message: 'Прогон завершён' } });
       if (!record) {
         record = {
@@ -125,6 +145,7 @@ async function handleRequest(req, res) {
           startedAt: new Date().toISOString(),
           finished: false,
           bot: new FactoryBot({}),
+          seqResponses: new Map(),
           telemetry: {
             profitHistory: [],
             lastState: null,
@@ -139,11 +160,11 @@ async function handleRequest(req, res) {
         runs.set(runId, record);
       }
 
-      const seq = body.seq ?? Number(req.headers['x-arena-seq'] || 0);
       const isNewEvent = !record.telemetry.seenSeq.has(seq);
       record.telemetry.seenSeq.add(seq);
       const payload = { ...body, seq };
       const commands = record.bot.handleEvent(payload).map(({ type, ...command }) => ({ cmd: type, ...command }));
+      record.seqResponses.set(seq, commands);
       const elapsedMs = Math.round((performance.now() - t0) * 100) / 100;
 
       if (body.state && isNewEvent) {
@@ -192,6 +213,7 @@ async function handleRequest(req, res) {
 
   // API для веб-интерфейса: /api/runs
   if (url.pathname === '/api/runs' && req.method === 'GET') {
+    if (!DASHBOARD) return sendJson(res, 404, { error: 'Not Found' });
     const list = [...runs.values()].map(r => ({
       runId: r.runId,
       mode: r.mode,
@@ -205,6 +227,7 @@ async function handleRequest(req, res) {
 
   const apiRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
   if (apiRunMatch && req.method === 'GET') {
+    if (!DASHBOARD) return sendJson(res, 404, { error: 'Not Found' });
     const runId = decodeURIComponent(apiRunMatch[1]);
     const record = runs.get(runId);
     if (!record) return sendJson(res, 404, { error: 'Run not found' });
@@ -228,9 +251,27 @@ async function handleRequest(req, res) {
 
   // Локальная симуляция: /api/simulate
   if (url.pathname === '/api/simulate' && req.method === 'POST') {
-    const body = await readJsonBody(req);
+    if (!DASHBOARD) return sendJson(res, 404, { error: 'Not Found' });
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (err) {
+      if (err?.message === 'Payload too large') {
+        return sendJson(res, 413, { error: { code: 'payload_too_large', message: 'Тело запроса больше 2 МБ' } });
+      }
+      return sendJson(res, 400, { error: { code: 'invalid_json', message: 'Некорректный JSON' } });
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return sendJson(res, 400, { error: { code: 'invalid_body', message: 'Тело запроса должно быть объектом' } });
+    }
     const seed = Number(body.seed ?? Math.floor(Math.random() * 100000));
     const horizon = Number(body.horizon ?? 650);
+    if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) {
+      return sendJson(res, 400, { error: { code: 'invalid_seed', message: 'seed — целое 0..2^32-1' } });
+    }
+    if (!Number.isInteger(horizon) || horizon < 1 || horizon > 2000) {
+      return sendJson(res, 400, { error: { code: 'invalid_horizon', message: 'horizon — целое 1..2000' } });
+    }
 
     const emuLevel3 = new ArenaEmulator({ seed, horizon });
     const botLevel3 = new FactoryBot(emuLevel3.getStartPayload());
@@ -266,6 +307,7 @@ async function handleRequest(req, res) {
 
   // Раздача index.html
   if ((url.pathname === '/' || url.pathname === '/index.html') && req.method === 'GET') {
+    if (!DASHBOARD) return sendJson(res, 404, { error: 'Not Found' });
     const htmlPath = path.join(__dirname, '..', 'web', 'index.html');
     if (fs.existsSync(htmlPath)) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
